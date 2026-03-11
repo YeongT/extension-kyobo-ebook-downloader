@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>eBook Reader</title>
+  <link rel="stylesheet" href="reader.css">
+</head>
+<body>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <span class="reader-title" id="readerTitle">eBook Reader</span>
+    </div>
+    <div class="toolbar-right">
+      <button class="tb-btn" id="tocToggle" title="목차">&#9776;</button>
+      <select id="pdfSize" class="tb-select" title="PDF 크기">
+        <option value="original">원본</option>
+        <option value="a4">A4</option>
+        <option value="b5">B5</option>
+        <option value="a5">A5</option>
+      </select>
+      <button class="tb-btn" id="downloadPDF" title="PDF 다운로드">&#128196;</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- TOC sidebar -->
+    <div class="toc-sidebar" id="tocSidebar">
+      <div class="toc-header">목차</div>
+      <div class="toc-list" id="tocList"></div>
+    </div>
+
+    <!-- Page area -->
+    <div class="page-area" id="pageArea">
+      <div class="page-status" id="pageStatus">도서를 불러오는 중...</div>
+      <img class="page-img" id="pageImg" alt="Page">
+    </div>
+  </div>
+
+  <!-- Navigation bar -->
+  <div class="nav-bar">
+    <div class="nav-section">
+      <button class="nav-btn" id="prevPage" title="이전 (←)">&#9664;</button>
+      <div class="page-info">
+        <input type="number" id="currentPage" value="1" min="1">
+        <span class="page-sep">/</span>
+        <span id="totalPages">0</span>
+      </div>
+      <button class="nav-btn" id="nextPage" title="다음 (→)">&#9654;</button>
+    </div>
+    <div class="nav-divider"></div>
+    <div class="nav-section">
+      <button class="nav-btn" id="zoomOut" title="축소 (-)">&#8722;</button>
+      <span class="zoom-text" id="zoomText">너비</span>
+      <button class="nav-btn" id="zoomIn" title="확대 (+)">&#43;</button>
+      <button class="nav-btn fit-btn" id="fitWidth" title="너비 맞춤">&#8596;</button>
+      <button class="nav-btn fit-btn" id="fitPage" title="페이지 맞춤">&#11036;</button>
+    </div>
+  </div>
+
+  <script src="cache-db.js"></script>
+  <script src="reader.js"></script>
+</body>
+</html>

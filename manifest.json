@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Kyobo eBook PDF Downloader",
+  "version": "1.0.0",
+  "description": "교보 전자도서관 ebook 뷰어에서 PDF로 다운로드 + 리더",
+  "permissions": ["storage", "activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://wviewer.kyobobook.co.kr/*"
+      ],
+      "js": ["inject.js"],
+      "world": "MAIN",
+      "all_frames": false,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://wviewer.kyobobook.co.kr/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": false,
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CAU 교보 ebook PDF 다운로더",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/jspdf.umd.min.js"],
+      "matches": ["https://wviewer.kyobobook.co.kr/*"]
+    }
+  ]
+}

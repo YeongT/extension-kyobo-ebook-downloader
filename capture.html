@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Capture Manager</title>
+  <link rel="stylesheet" href="capture.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="book-title" id="bookTitle">Loading...</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status" id="statusBadge">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">연결 중...</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="main">
+    <aside class="sidebar">
+      <section class="panel">
+        <h3>캡처 범위</h3>
+        <div class="range-inputs">
+          <input type="number" id="startPage" value="1" min="1">
+          <span>~</span>
+          <input type="number" id="endPage" value="1" min="1">
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>속도</h3>
+        <div class="mode-group">
+          <button class="mode-btn" data-mode="fast">빠름</button>
+          <button class="mode-btn active" data-mode="normal">일반</button>
+          <button class="mode-btn" data-mode="stealth">스텔스</button>
+        </div>
+      </section>
+
+      <section class="panel" id="progressPanel" style="display:none">
+        <h3>진행</h3>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-info" id="progressInfo">0/0</div>
+      </section>
+
+      <section class="panel ctrl-buttons">
+        <button class="btn btn-primary" id="btnStart">캡처 시작</button>
+        <button class="btn btn-secondary" id="btnResumeCap" style="display:none">이어서 캡처</button>
+        <button class="btn btn-warning" id="btnPause" style="display:none">일시정지</button>
+        <button class="btn btn-primary" id="btnResume" style="display:none">계속</button>
+        <button class="btn btn-danger" id="btnStop" style="display:none">중지</button>
+      </section>
+
+      <section class="panel">
+        <h3>PDF 크기</h3>
+        <select id="pdfSize" class="select">
+          <option value="original">원본</option>
+          <option value="a4">A4 (210x297)</option>
+          <option value="b5">B5 (182x257)</option>
+          <option value="a5">A5 (148x210)</option>
+        </select>
+      </section>
+    </aside>
+
+    <div class="content">
+      <div class="grid" id="thumbnailGrid">
+        <div class="empty-state">캡처된 페이지가 없습니다</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottombar">
+    <div class="selection-info">
+      <span id="selectionCount">0</span>페이지 선택
+      <button class="link-btn" id="selectAll">전체 선택</button>
+      <button class="link-btn" id="deselectAll">선택 해제</button>
+    </div>
+    <button class="btn btn-accent" id="btnGeneratePDF" disabled>PDF 생성</button>
+  </div>
+
+  <div class="modal" id="previewModal">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <span id="previewTitle">페이지</span>
+        <button class="modal-close" id="previewClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <button class="modal-nav prev" id="previewPrev">&#8249;</button>
+        <img id="previewImg" alt="Preview">
+        <button class="modal-nav next" id="previewNext">&#8250;</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm" id="rotateLeft">&#8630; 왼쪽 회전</button>
+        <button class="btn btn-sm" id="rotateRight">&#8631; 오른쪽 회전</button>
+        <button class="btn btn-sm btn-warning" id="recaptureBtn">재캡처</button>
+        <button class="btn btn-sm btn-danger" id="deleteBtn">삭제</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="cache-db.js"></script>
+  <script src="capture.js"></script>
+</body>
+</html>

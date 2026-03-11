@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+  <div class="view active" id="viewMain">
+    <header>
+      <span class="header-title">Kyobo eBook PDF</span>
+      <div class="header-right">
+        <button id="openCache" class="icon-btn" title="캐시된 도서">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+          </svg>
+        </button>
+        <button id="openSettings" class="icon-btn" title="설정">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="body">
+      <div class="card" id="statusCard">
+        <div class="status-badge">
+          <span class="dot" id="statusDot"></span>
+          <span id="statusText">연결 확인 중...</span>
+        </div>
+      </div>
+
+      <div class="card" id="bookInfoCard" style="display:none">
+        <div class="book-title" id="bookTitle">-</div>
+        <div class="book-meta" id="totalPages">-</div>
+      </div>
+
+      <div class="card" id="actionCard" style="display:none">
+        <button id="btnCapture" class="btn btn-primary">캡처 매니저 열기</button>
+        <div id="captureControls" style="display:none">
+          <div id="miniProgress">
+            <div class="progress-bar"><div class="progress-fill" id="miniProgressFill"></div></div>
+            <div class="progress-text" id="miniProgressText">0%</div>
+          </div>
+          <div class="btn-row">
+            <button id="btnOpenManager" class="btn btn-secondary">매니저 열기</button>
+            <button id="btnStop" class="btn btn-danger">중지</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache View -->
+  <div class="view" id="viewCache">
+    <header>
+      <button id="cacheBackBtn" class="icon-btn" title="뒤로">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="header-title">캐시된 도서</span>
+      <div style="width:28px"></div>
+    </header>
+    <div class="body">
+      <div id="cacheBookList" class="cache-book-list">
+        <div class="cache-empty">불러오는 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings View -->
+  <div class="view" id="viewSettings">
+    <header>
+      <button id="backBtn" class="icon-btn" title="뒤로">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <span class="header-title">설정</span>
+      <div style="width:28px"></div>
+    </header>
+    <div class="body">
+      <div class="card">
+        <div class="setting-item">
+          <label class="check-row">
+            <input type="checkbox" id="autoRetry" checked>
+            <span>실패 시 자동 새로고침 &amp; 이어서 캡처</span>
+          </label>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">페이지 딜레이 (ms)</label>
+          <div class="delay-row">
+            <input type="number" id="sPageDelayMin" class="delay-input" value="800" min="300" max="30000" step="100">
+            <span class="delay-sep">~</span>
+            <input type="number" id="sPageDelayMax" class="delay-input" value="1500" min="300" max="30000" step="100">
+          </div>
+        </div>
+        <div class="setting-item">
+          <label class="setting-label">캡처 딜레이 (ms)</label>
+          <input type="number" id="captureDelay" class="delay-input" style="width:100%" value="500" min="100" max="3000" step="100">
+        </div>
+      </div>
+      <div class="card">
+        <div class="info-text">
+          <p>스텔스 모드: 랜덤 딜레이 + 가끔 긴 휴식</p>
+          <p>"비정상적인 접근" 발생 시 자동 새로고침 권장</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="cache-db.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
