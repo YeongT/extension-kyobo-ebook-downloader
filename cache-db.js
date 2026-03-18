@@ -138,3 +138,56 @@ function extDeletePage(bookId, pageNum) {
     });
   });
 }
+
+function extFindBookByTitle(title) {
+  if (!title) return Promise.resolve(null);
+  return openExtDB().then(function (db) {
+    return new Promise(function (resolve) {
+      var tx = db.transaction('books', 'readonly');
+      var req = tx.objectStore('books').getAll();
+      req.onsuccess = function () {
+        db.close();
+        var books = req.result || [];
+        for (var i = 0; i < books.length; i++) {
+          if (books[i].title === title) { resolve(books[i].bookId); return; }
+        }
+        resolve(null);
+      };
+      req.onerror = function () { db.close(); resolve(null); };
+    });
+  });
+}
+
+function extMigrateBook(oldBookId, newBookId) {
+  if (oldBookId === newBookId) return Promise.resolve();
+  return openExtDB().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(['pages', 'books'], 'readwrite');
+      var pagesStore = tx.objectStore('pages');
+      var booksStore = tx.objectStore('books');
+
+      var metaReq = booksStore.get(oldBookId);
+      metaReq.onsuccess = function () {
+        if (metaReq.result) {
+          var m = metaReq.result;
+          booksStore.put({ bookId: newBookId, title: m.title, totalPages: m.totalPages, toc: m.toc || [], timestamp: m.timestamp });
+          booksStore.delete(oldBookId);
+        }
+      };
+
+      var cur = pagesStore.index('bookId').openCursor(oldBookId);
+      cur.onsuccess = function (e) {
+        var c = e.target.result;
+        if (c) {
+          var pg = c.value;
+          pagesStore.put({ id: newBookId + '_' + pg.pageNum, bookId: newBookId, pageNum: pg.pageNum, dataURL: pg.dataURL, width: pg.width, height: pg.height, timestamp: pg.timestamp });
+          pagesStore.delete(c.primaryKey);
+          c.continue();
+        }
+      };
+
+      tx.oncomplete = function () { db.close(); resolve(); };
+      tx.onerror = function () { db.close(); reject(tx.error); };
+    });
+  });
+}

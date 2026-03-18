@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>세션 관리자 - Kyobo eBook PDF</title>
+  <link rel="stylesheet" href="sessions.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">K</div>
+        <div class="header-text">
+          <h1>Kyobo eBook</h1>
+          <span class="header-sub">캡처 세션 관리</span>
+        </div>
+      </div>
+      <div class="sidebar-tools">
+        <button class="tool-btn" id="importBtn" title="세션 불러오기">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          불러오기
+        </button>
+        <input type="file" id="importFile" hidden accept=".zip">
+      </div>
+      <div class="book-list" id="bookList"></div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div id="emptyState" class="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d2d2d7" stroke-width="1.5"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+        <p>왼쪽에서 도서를 선택하세요</p>
+      </div>
+
+      <div id="bookDetail" class="detail" hidden>
+        <!-- Header -->
+        <div class="detail-header">
+          <div class="detail-title-row">
+            <h2 id="detailTitle"></h2>
+            <button class="icon-btn danger" id="deleteBookBtn" title="도서 삭제">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+            </button>
+          </div>
+          <div class="detail-meta" id="detailMeta"></div>
+          <div class="detail-progress-row">
+            <div class="progress-bar large"><div class="progress-fill" id="detailFill"></div></div>
+            <span class="progress-label" id="detailProgress"></span>
+          </div>
+        </div>
+
+        <!-- Viewer Status -->
+        <div class="scan-card" id="scanCard">
+          <div class="scan-header">
+            <span class="scan-status" id="scanStatus">
+              <span class="scan-dot" id="scanDot"></span>
+              <span id="scanStatusText">뷰어 연결 안 됨</span>
+            </span>
+          </div>
+          <div class="scan-body">
+            <div class="scan-live" id="scanLiveInfo" hidden>
+              <div class="progress-bar large"><div class="progress-fill" id="scanFill"></div></div>
+              <div class="scan-live-text" id="scanLiveText">0/0 (0%)</div>
+            </div>
+            <div class="scan-actions">
+              <button class="action-btn primary" id="switchToViewerBtn" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                뷰어로 전환
+              </button>
+              <button class="action-btn primary" id="openViewerBtn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                뷰어 열기
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Download & Export -->
+        <div class="detail-toolbar" id="downloadToolbar">
+          <div class="toolbar-group">
+            <select id="pdfSize" class="select-input">
+              <option value="original">원본 크기</option>
+              <option value="a4">A4 (210x297mm)</option>
+              <option value="b5">B5 (182x257mm)</option>
+              <option value="a5">A5 (148x210mm)</option>
+            </select>
+            <button class="action-btn primary" id="dlPdf">PDF 저장</button>
+            <button class="action-btn" id="dlZip">ZIP 저장</button>
+          </div>
+          <div class="toolbar-group">
+            <button class="action-btn" id="openReaderBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+              리더
+            </button>
+            <button class="action-btn" id="exportBtn">세션 내보내기</button>
+          </div>
+        </div>
+
+        <!-- TOC -->
+        <div class="grid-section" id="tocSection" hidden>
+          <div class="grid-header collapsible" id="tocToggle">
+            <span id="tocLabel">목차</span>
+            <span class="collapse-icon" id="tocIcon">▾</span>
+          </div>
+          <div id="tocList" class="toc-list"></div>
+        </div>
+
+        <!-- Page Grid -->
+        <div class="grid-section" id="gridSection">
+          <div class="grid-header collapsible" id="gridToggle">
+            <span id="gridLabel">페이지 맵</span>
+            <div style="display:flex;align-items:center;gap:12px">
+              <div class="grid-legend">
+                <span class="legend-item"><span class="legend-dot captured"></span>캡처됨</span>
+                <span class="legend-item"><span class="legend-dot missing"></span>누락</span>
+              </div>
+              <span class="collapse-icon" id="gridIcon">▾</span>
+            </div>
+          </div>
+          <div class="page-grid" id="pageGrid"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Preview modal -->
+  <div class="modal-overlay" id="previewModal" hidden>
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-container">
+      <div class="modal-header">
+        <span id="modalTitle">페이지 미리보기</span>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <button class="nav-btn" id="prevPage">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="preview-wrapper">
+          <img id="previewImg" class="preview-img" src="" alt="">
+        </div>
+        <button class="nav-btn" id="nextPage">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="modal-footer">
+        <span id="modalInfo"></span>
+        <button class="action-btn danger small" id="deletePageBtn">이 페이지 삭제</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Progress overlay -->
+  <div class="progress-overlay" id="progressOverlay" hidden>
+    <div class="progress-card">
+      <div class="progress-title" id="progressTitle">처리 중...</div>
+      <div class="progress-bar large"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">0%</div>
+    </div>
+  </div>
+
+  <!-- Error dialog -->
+  <div class="modal-overlay" id="errorDialog" hidden>
+    <div class="modal-backdrop" id="errorBackdrop"></div>
+    <div class="error-dialog">
+      <div class="error-dialog-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#ff3b30" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <div class="error-dialog-title" id="errorTitle">오류 발생</div>
+      <div class="error-dialog-message" id="errorMessage"></div>
+      <div class="error-dialog-detail" id="errorDetail"></div>
+      <div class="error-dialog-actions">
+        <button class="action-btn" id="errorCopyBtn">복사</button>
+        <button class="action-btn primary" id="errorCloseBtn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="lib/jspdf.umd.min.js"></script>
+  <script src="lib/jszip.min.js"></script>
+  <script src="cache-db.js"></script>
+  <script src="sessions.js"></script>
+</body>
+</html>

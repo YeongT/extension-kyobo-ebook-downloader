@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Kyobo eBook PDF Downloader",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "교보 전자도서관 ebook 뷰어에서 PDF로 다운로드 + 리더",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "tabs"],
   "background": {
     "service_worker": "background.js"
   },
@@ -24,6 +24,14 @@
       "js": ["content.js"],
       "all_frames": false,
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.dkyobobook.co.kr/*"
+      ],
+      "js": ["cache-db.js", "library.js"],
+      "all_frames": false,
+      "run_at": "document_idle"
     }
   ],
   "action": {
@@ -42,7 +50,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["lib/jspdf.umd.min.js"],
+      "resources": ["lib/jspdf.umd.min.js", "lib/jszip.min.js"],
       "matches": ["https://wviewer.kyobobook.co.kr/*"]
     }
   ]

@@ -26,9 +26,86 @@
     return { pageW: tw, pageH: th, imgW: sw, imgH: sh, x: (tw - sw) / 2, y: (th - sh) / 2 };
   }
 
+  // ── Book selector ──
+  async function showBookSelector() {
+    try {
+      var books = await extGetAllBooks();
+      if (!books || books.length === 0) {
+        showStatus('캐시된 도서가 없습니다.\n\n세션 관리자에서 도서를 스캔해주세요.');
+        return;
+      }
+      books.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+
+      var html = '<div style="max-width:520px;margin:0 auto;padding:32px 24px">' +
+        '<h2 style="font-size:20px;font-weight:700;margin-bottom:20px;color:#1d1d1f;text-align:center">도서 선택</h2>';
+      for (var i = 0; i < books.length; i++) {
+        var b = books[i];
+        var pct = (b.totalPages > 0 && b.cachedCount > 0) ? Math.round(b.cachedCount / b.totalPages * 100) : 0;
+        var isComplete = b.totalPages > 0 && b.cachedCount >= b.totalPages;
+        var statusText = isComplete ? '스캔 완료' : pct + '% (' + (b.cachedCount || 0) + '/' + (b.totalPages || '?') + 'p)';
+        var statusColor = isComplete ? '#16a34a' : '#aeaeb2';
+
+        // Try to get first page as cover thumbnail
+        var coverStyle = 'width:64px;height:88px;border-radius:8px;background:linear-gradient(135deg,#f0f0f0,#e5e5e5);' +
+          'display:flex;align-items:center;justify-content:center;color:#c7c7cc;font-size:24px;flex-shrink:0;' +
+          'box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden';
+
+        html += '<div class="book-select-item" data-bookid="' + (b.bookId || '').replace(/"/g, '&quot;') + '" style="' +
+          'display:flex;align-items:center;gap:16px;padding:16px 18px;border-radius:14px;cursor:pointer;' +
+          'border:1px solid #e8e8ed;margin-bottom:10px;transition:all .15s;background:#fff">' +
+          '<div style="' + coverStyle + '" data-cover="' + (b.bookId || '').replace(/"/g, '&quot;') + '">&#128218;</div>' +
+          '<div style="min-width:0;flex:1">' +
+            '<div style="font-size:15px;font-weight:650;color:#1d1d1f;line-height:1.4;margin-bottom:4px;' +
+              'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">' +
+              (b.title || '(제목 없음)').replace(/</g, '&lt;') + '</div>' +
+            '<div style="font-size:12px;color:' + statusColor + ';font-weight:600">' + statusText + '</div>' +
+          '</div>' +
+          '<div style="font-size:12px;color:#e94560;font-weight:700;flex-shrink:0;padding:6px 12px;' +
+            'background:#fef2f4;border-radius:8px">열기</div>' +
+        '</div>';
+      }
+      html += '</div>';
+
+      // Load cover thumbnails from first cached page
+      setTimeout(function () {
+        var coverEls = $('pageStatus').querySelectorAll('[data-cover]');
+        coverEls.forEach(function (el) {
+          var bid = el.dataset.cover;
+          if (!bid) return;
+          extGetPagesInfo(bid).then(function (pgs) {
+            if (!pgs || pgs.length === 0) return;
+            return extGetPage(bid, pgs[0].pageNum);
+          }).then(function (pg) {
+            if (pg && pg.dataURL) {
+              el.innerHTML = '<img src="' + pg.dataURL + '" style="width:100%;height:100%;object-fit:cover">';
+            }
+          }).catch(function () {});
+        });
+      }, 100);
+
+      $('pageStatus').innerHTML = html;
+      $('pageStatus').style.display = '';
+
+      $('pageStatus').querySelectorAll('.book-select-item').forEach(function (el) {
+        el.addEventListener('mouseenter', function () { this.style.borderColor = '#e94560'; this.style.background = '#fef2f4'; });
+        el.addEventListener('mouseleave', function () { this.style.borderColor = '#e8e8ed'; this.style.background = '#fff'; });
+        el.addEventListener('click', function () {
+          var id = this.dataset.bookid;
+          if (id) {
+            bookId = id;
+            history.replaceState(null, '', '?book=' + encodeURIComponent(id));
+            init();
+          }
+        });
+      });
+    } catch (e) {
+      showStatus('도서 목록 로드 실패: ' + e.message);
+    }
+  }
+
   // ── Init ──
   async function init() {
-    if (!bookId) { showStatus('도서를 선택해주세요'); return; }
+    if (!bookId) { showBookSelector(); return; }
 
     showStatus('도서 정보 불러오는 중...');
     try {
