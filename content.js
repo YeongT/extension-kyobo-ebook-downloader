@@ -13,15 +13,17 @@
 
   // ── Live settings ──
   var MODES = {
+    turbo:   { min: 100,  max: 250 },
     fast:    { min: 300,  max: 600 },
     normal:  { min: 800,  max: 1500 },
-    stealth: { min: 2000, max: 5000 }
+    careful: { min: 1500, max: 3000 },
+    stealth: { min: 2500, max: 5000 }
   };
   var liveSettings = { dMin: 800, dMax: 1500, stealth: false, mode: 'normal', capDelay: 500 };
 
   function applyMode(mode) {
     liveSettings.mode = mode;
-    liveSettings.stealth = (mode === 'stealth');
+    liveSettings.stealth = (mode === 'stealth' || mode === 'careful');
     if (MODES[mode]) {
       liveSettings.dMin = MODES[mode].min;
       liveSettings.dMax = MODES[mode].max;
@@ -384,8 +386,10 @@
           '<div class="sec-wrap">' +
             '<div class="sec">캡처 모드</div>' +
             '<div class="modes">' +
+              '<div class="mbtn" data-m="turbo">터보</div>' +
               '<div class="mbtn" data-m="fast">빠름</div>' +
               '<div class="mbtn on" data-m="normal">일반</div>' +
+              '<div class="mbtn" data-m="careful">신중</div>' +
               '<div class="mbtn" data-m="stealth">스텔스</div>' +
             '</div>' +
           '</div>' +
@@ -651,7 +655,7 @@
       if (capRow) capRow.style.display = 'none';
       if (prog) prog.classList.remove('on');
     } else if (s === 'active') {
-      if (text) text.textContent = '캡처중';
+      if (text) text.textContent = '캡처 진행중...';
       if (idleRow) idleRow.style.display = 'none';
       if (capRow) capRow.style.display = '';
       if (prog) prog.classList.add('on');
@@ -668,14 +672,20 @@
     }
   }
 
-  function updateO(cur, total, page) {
+  // bookTotal: absolute total pages of the book (for progress bar)
+  // capturedSoFar: total cached pages including previously cached ones
+  var _bookTotal = 0;
+
+  function updateO(capturedSoFar, bookTotal, page) {
     if (!overlayRoot) return;
     var text = overlayRoot.getElementById('oText');
     var pr = overlayRoot.getElementById('oPr');
     var bar = overlayRoot.getElementById('oBar');
-    var pct = total > 0 ? Math.round(cur / total * 100) : 0;
-    if (text && !isPaused) text.textContent = cur + '/' + total + ' (' + pct + '%)';
-    if (pr) pr.textContent = cur + '/' + total + (page ? '  p' + page : '');
+    if (bookTotal > 0) _bookTotal = bookTotal;
+    var bt = _bookTotal || bookTotal;
+    var pct = bt > 0 ? Math.round(capturedSoFar / bt * 100) : 0;
+    if (text && !isPaused) text.textContent = '캡처 진행중...';
+    if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + (page ? '  p' + page : '');
     if (bar) bar.style.width = pct + '%';
   }
 
@@ -746,6 +756,8 @@
       if (s.url === location.href) { match = true; }
       else if (s.pathname && s.pathname === location.pathname) { match = true; }
       else { try { match = new URL(s.url).pathname === location.pathname; } catch (e) {} }
+      // Recovery reopens the same book on the viewer domain — always match
+      if (!match && location.hostname === 'wviewer.kyobobook.co.kr') { match = true; }
       if (!match) { clearSession(); return; }
       clearSession();
 
@@ -774,10 +786,10 @@
     var resume = options.resume || false;
     var autoRetry = options.autoRetry !== false;
 
-    liveSettings.dMin = Math.max(300, Math.min(30000, options.pageDelayMin || 800));
+    liveSettings.dMin = Math.max(100, Math.min(30000, options.pageDelayMin || 800));
     liveSettings.dMax = Math.max(liveSettings.dMin, Math.min(30000, options.pageDelayMax || 1500));
     liveSettings.mode = options.mode || 'normal';
-    liveSettings.stealth = (liveSettings.mode === 'stealth');
+    liveSettings.stealth = (liveSettings.mode === 'stealth' || liveSettings.mode === 'careful');
     liveSettings.capDelay = capDelay;
 
     createOverlay(); setOState('active'); updateOModeHighlight();
@@ -831,7 +843,6 @@
         } catch (e) {}
       }
 
-      var toCapture = endPage - startPage + 1;
       var cached = {};
       // Only skip cached pages in resume mode - new scan overwrites everything
       if (resume) {
@@ -856,7 +867,11 @@
         } catch (e) {}
       }
 
-      notifyPopup('captureProgress', { current: 0, total: toCapture, message: '준비 중...' });
+      // Count total cached pages across the whole book (for absolute progress)
+      var totalCached = Object.keys(cached).length;
+      _bookTotal = total;
+
+      notifyPopup('captureProgress', { current: totalCached, total: total, message: '준비 중...' });
       var dims = await callInject('getCanvasDimensions');
       if (!dims) { notifyPopup('captureError', { message: '캔버스 없음' }); isCapturing = false; setOState('error'); return; }
 
@@ -880,7 +895,7 @@
       var captured = 0, skipped = 0, consErr = 0;
 
       for (var page = startPage; page <= endPage; page++) {
-        if (shouldStop) { notifyPopup('captureStopped', { capturedCount: captured + skipped }); break; }
+        if (shouldStop) { notifyPopup('captureStopped', { capturedCount: totalCached }); break; }
         while (isPaused && !shouldStop) await delay(500);
 
         captureSession._currentPage = page;
@@ -895,9 +910,8 @@
         if (cached[page]) {
           skipped++;
           consErr = 0;
-          var t1 = captured + skipped;
-          updateO(t1, toCapture, page);
-          notifyPopup('captureProgress', { current: t1, total: toCapture, page: page, message: page + 'p 캐시 건너뜀' });
+          updateO(totalCached, total, page);
+          notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 캐시 건너뜀' });
           continue;
         }
 
@@ -905,7 +919,7 @@
         var result = await navigateAndCapture(page);
 
         if (result && result.ok) {
-          captured++; consErr = 0;
+          captured++; totalCached++; consErr = 0;
           // Mark as cached so re-runs skip this page
           cached[page] = true;
           if (result.dataURL) {
@@ -913,32 +927,30 @@
           }
           // Warn if MAIN world cache write failed (data still sent to background cache)
           if (result.cached === false) {
-            notifyPopup('captureProgress', { current: captured + skipped, total: toCapture, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
+            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
           }
-          var t2 = captured + skipped;
-          updateO(t2, toCapture, page);
-          notifyPopup('captureProgress', { current: t2, total: toCapture, page: page, message: t2 + '/' + toCapture + ' 캡처 완료' });
+          updateO(totalCached, total, page);
+          notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
         } else {
           // Page failed - retry up to 3 times before giving up
           var retried = false;
           var errReason = (result && result.error) ? result.error : 'unknown';
           for (var retryN = 1; retryN <= 3 && !shouldStop; retryN++) {
-            notifyPopup('captureProgress', { current: captured + skipped, total: toCapture, page: page, message: page + 'p 재시도 ' + retryN + '/3...' });
-            updateO(captured + skipped, toCapture, page);
+            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 재시도 ' + retryN + '/3...' });
+            updateO(totalCached, total, page);
             await delay(liveSettings.dMin * 2);
 
             if (document.hidden) { await focusViewerTab(); await delay(400); }
             result = await navigateAndCapture(page);
             if (result && result.ok) {
               retried = true;
-              captured++; consErr = 0;
+              captured++; totalCached++; consErr = 0;
               cached[page] = true;
               if (result.dataURL) {
                 forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
               }
-              var t3 = captured + skipped;
-              updateO(t3, toCapture, page);
-              notifyPopup('captureProgress', { current: t3, total: toCapture, page: page, message: page + 'p 재시도 성공' });
+              updateO(totalCached, total, page);
+              notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 재시도 성공' });
               break;
             }
           }
@@ -946,7 +958,7 @@
           if (!retried) {
             consErr++;
             missingPages.push(page);
-            notifyPopup('captureProgress', { current: captured + skipped, total: toCapture, page: page, message: page + 'p 실패 (3회 재시도 후): ' + errReason });
+            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 실패 (3회 재시도 후): ' + errReason });
             showToast(page + 'p 캡처 실패', 3000);
 
             if (consErr >= 3) {
@@ -982,11 +994,25 @@
       showMissingPages(missingPages);
 
       if (captured > 0 && !shouldStop) {
-        var msg = (captured + skipped) + '/' + toCapture + '페이지 캡처 완료';
+        var isComplete = missingPages.length === 0 && totalCached >= total;
+        var msg = totalCached + '/' + total + '페이지 캡처 완료';
         if (missingPages.length > 0) msg += ' (' + missingPages.length + '개 누락)';
         showToast(msg, 5000);
         setOState('idle');
-        notifyPopup('captureComplete', { capturedCount: captured + skipped, title: title, partial: shouldStop, missing: missingPages.length });
+        notifyPopup('captureComplete', {
+          capturedCount: totalCached, title: title, partial: shouldStop,
+          missing: missingPages.length, missingPages: missingPages
+        });
+        // Open sessions tab and close viewer
+        setTimeout(function () {
+          chrome.runtime.sendMessage({
+            target: 'background', action: 'openSessions',
+            title: title
+          }, function () {
+            void chrome.runtime.lastError;
+            setTimeout(function () { window.close(); }, 500);
+          });
+        }, 2000);
       } else if (shouldStop) {
         setOState('idle');
       }
@@ -1006,7 +1032,7 @@
     if (isCapturing || !pageList || pageList.length === 0) return;
     isCapturing = true; shouldStop = false; isPaused = false;
 
-    liveSettings.dMin = Math.max(300, opts.pageDelayMin || 800);
+    liveSettings.dMin = Math.max(100, opts.pageDelayMin || 800);
     liveSettings.dMax = Math.max(liveSettings.dMin, opts.pageDelayMax || 1500);
     liveSettings.capDelay = opts.captureDelay || 500;
 

@@ -29,7 +29,7 @@
       if (noisedTypes[type] && this === window) {
         var origHandler = handler;
         handler = function (event) {
-          var jitter = Math.random() * 80 + 10;
+          var jitter = Math.random() * 400 + 20;
           setTimeout(function () { origHandler.call(this, event); }.bind(this), jitter);
         };
       }
@@ -37,17 +37,39 @@
     };
   } catch (e) {}
 
-  // Periodically inject fake mouse events with high variance to poison the detector
-  // Use mousemove instead of mousedown/mouseup to avoid triggering viewer page navigation
+  // Periodically inject fake interaction events to poison the bot detector.
+  // The detector tracks mousedown/mouseup/keydown/keyup timing intervals on window.
+  // If stddev of intervals is too low (< threshold after 40+ events) → bot flagged.
+  // Strategy: dispatch events at highly varied intervals (2-12s) so stddev stays high.
   try {
-    setInterval(function () {
-      var target = document.querySelector('.header_zone') || document.body;
+    function _fakeInteraction() {
+      var target = document.querySelector('.header_zone') || document.querySelector('[data-layout="header_zone"]') || document.body;
       var cx = Math.random() * window.innerWidth;
-      var cy = Math.random() * window.innerHeight;
-      target.dispatchEvent(new MouseEvent('mousemove', {
-        bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy
-      }));
-    }, 3000 + Math.random() * 5000);
+      var cy = 10 + Math.random() * 40; // stay in header area
+      var roll = Math.random();
+      if (roll < 0.4) {
+        // Fake mousedown/mouseup pair on header (won't trigger page navigation)
+        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+        setTimeout(function () {
+          target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+        }, 30 + Math.random() * 150);
+      } else if (roll < 0.7) {
+        // Fake keydown/keyup (safe keys that don't trigger viewer actions)
+        var keys = ['Shift', 'Control', 'Alt', 'CapsLock', 'ScrollLock'];
+        var key = keys[Math.floor(Math.random() * keys.length)];
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: key, code: key + 'Left', bubbles: true, cancelable: true }));
+        setTimeout(function () {
+          window.dispatchEvent(new KeyboardEvent('keyup', { key: key, code: key + 'Left', bubbles: true, cancelable: true }));
+        }, 50 + Math.random() * 200);
+      } else {
+        // mousemove for variety
+        target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy }));
+      }
+      // Schedule next at highly random interval (2-12s) for high stddev
+      setTimeout(_fakeInteraction, 2000 + Math.random() * 10000);
+    }
+    // Start after page loads
+    setTimeout(_fakeInteraction, 1000 + Math.random() * 3000);
   } catch (e) {}
 
   // ── 1a. Bypass DevTools detection (Worker heartbeat) ──
@@ -151,6 +173,32 @@
         return;
       }
       return origAlert.call(window, msg);
+    };
+  } catch (e) {}
+
+  // ── 1e. Suppress beforeunload dialogs (prevents "Leave site?" on tab close) ──
+  try {
+    // Capture-phase listener fires first and stops all other handlers
+    window.addEventListener('beforeunload', function (e) {
+      e.stopImmediatePropagation();
+      delete e.returnValue;
+    }, true);
+    // Block onbeforeunload property assignment
+    Object.defineProperty(window, 'onbeforeunload', {
+      get: function () { return null; },
+      set: function () {},
+      configurable: true
+    });
+    // Intercept addEventListener to silently drop beforeunload registrations
+    var _origAEL = EventTarget.prototype.addEventListener;
+    var _origREL = EventTarget.prototype.removeEventListener;
+    var _blockedBU = [];
+    EventTarget.prototype.addEventListener = function (type, handler, opts) {
+      if (type === 'beforeunload' && this === window) {
+        _blockedBU.push(handler);
+        return;
+      }
+      return _origAEL.call(this, type, handler, opts);
     };
   } catch (e) {}
 
@@ -264,30 +312,38 @@
     return false;
   }
 
+  // Async mouse click: delay > 20ms between down/up to avoid bot detector
+  // (detector only tracks events with duration ≤ 20ms)
   function dispatchMouseDown(el) {
-    var od = el.style.display, ov = el.style.visibility, oo = el.style.opacity;
-    el.style.display = 'block'; el.style.visibility = 'visible'; el.style.opacity = '1';
-    var r = el.getBoundingClientRect();
-    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    if (r.width === 0 || r.height === 0) { cx = window.innerWidth / 2; cy = window.innerHeight / 2; }
-    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
-    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
-    el.style.display = od; el.style.visibility = ov; el.style.opacity = oo;
+    return new Promise(function (resolve) {
+      var od = el.style.display, ov = el.style.visibility, oo = el.style.opacity;
+      el.style.display = 'block'; el.style.visibility = 'visible'; el.style.opacity = '1';
+      var r = el.getBoundingClientRect();
+      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (r.width === 0 || r.height === 0) { cx = window.innerWidth / 2; cy = window.innerHeight / 2; }
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+      // Delay 40-120ms so duration > 20ms threshold
+      setTimeout(function () {
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+        el.style.display = od; el.style.visibility = ov; el.style.opacity = oo;
+        resolve();
+      }, 40 + Math.random() * 80);
+    });
   }
 
   // Manual prev/next (API + UI button only, no arrow keys)
   function clickNextPage() {
-    if (navigateViaAPI(true)) return true;
+    if (navigateViaAPI(true)) return Promise.resolve(true);
     var btn = document.querySelector('a[data-navi="right"]');
-    if (btn) { dispatchMouseDown(btn); return true; }
-    return false;
+    if (btn) return dispatchMouseDown(btn).then(function () { return true; });
+    return Promise.resolve(false);
   }
 
   function clickPrevPage() {
-    if (navigateViaAPI(false)) return true;
+    if (navigateViaAPI(false)) return Promise.resolve(true);
     var btn = document.querySelector('a[data-navi="left"]');
-    if (btn) { dispatchMouseDown(btn); return true; }
-    return false;
+    if (btn) return dispatchMouseDown(btn).then(function () { return true; });
+    return Promise.resolve(false);
   }
 
   // Direct page jump (primary navigation for capture)
@@ -326,14 +382,16 @@
         var r = viewer.getBoundingClientRect();
         var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
         viewer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
-        viewer.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+        // Delay > 20ms between down/up to avoid bot detector
+        setTimeout(function () {
+          viewer.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
+        }, 40 + Math.random() * 60);
       }
 
       setTimeout(function () {
         var el = document.querySelector('.range_current[data-page="pageInfo"]');
         if (!el) { resolve(false); return; }
-        dispatchMouseDown(el);
-        el.click();
+        dispatchMouseDown(el).then(function () { el.click(); });
 
         setTimeout(function () {
           var input = document.querySelector('.range_input input, input.page_input, input[data-page]');
@@ -343,8 +401,11 @@
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          resolve(true);
+          // Delay > 20ms between keydown and keyup to avoid bot detector
+          setTimeout(function () {
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+            resolve(true);
+          }, 40 + Math.random() * 80);
         }, 500);
       }, 600);
     });
@@ -728,8 +789,8 @@
       case 'clearState': clearState(); resp.data = true; send(); break;
       case 'getTOC': resp.data = getTOC(); send(); break;
       case 'getViewerPageNum': resp.data = getViewerPageNum(); send(); break;
-      case 'nextPage': resp.data = clickNextPage(); send(); break;
-      case 'prevPage': resp.data = clickPrevPage(); send(); break;
+      case 'nextPage': clickNextPage().then(function (r) { resp.data = r; send(); }); break;
+      case 'prevPage': clickPrevPage().then(function (r) { resp.data = r; send(); }); break;
       case 'goToPage':
         Promise.resolve(goToPage(event.data.pageNum)).then(function (r) { resp.data = r; send(); }).catch(function () { resp.data = false; send(); });
         break;

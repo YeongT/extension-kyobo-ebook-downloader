@@ -6,6 +6,8 @@
   var currentPageIdx = 0;
   var zoom = 100;
   var fitMode = 'width';
+  var viewMode = 'single'; // single | spread | scroll
+  var coverIncluded = true;
   var tocVisible = true;
   var toc = [];
   var bookTitle = '';
@@ -44,8 +46,6 @@
         var isComplete = b.totalPages > 0 && b.cachedCount >= b.totalPages;
         var statusText = isComplete ? '스캔 완료' : pct + '% (' + (b.cachedCount || 0) + '/' + (b.totalPages || '?') + 'p)';
         var statusColor = isComplete ? '#16a34a' : '#aeaeb2';
-
-        // Try to get first page as cover thumbnail
         var coverStyle = 'width:64px;height:88px;border-radius:8px;background:linear-gradient(135deg,#f0f0f0,#e5e5e5);' +
           'display:flex;align-items:center;justify-content:center;color:#c7c7cc;font-size:24px;flex-shrink:0;' +
           'box-shadow:0 2px 8px rgba(0,0,0,.08);overflow:hidden';
@@ -66,7 +66,6 @@
       }
       html += '</div>';
 
-      // Load cover thumbnails from first cached page
       setTimeout(function () {
         var coverEls = $('pageStatus').querySelectorAll('[data-cover]');
         coverEls.forEach(function (el) {
@@ -127,7 +126,7 @@
       pages = pagesInfo;
       $('totalPages').textContent = pages.length;
       $('currentPage').max = pages.length;
-      await loadPage(0);
+      showView();
     } catch (e) {
       showStatus('로드 실패: ' + e.message);
     }
@@ -141,8 +140,38 @@
 
   function hideStatus() { $('pageStatus').style.display = 'none'; }
 
-  // ── Page loading ──
-  async function loadPage(idx) {
+  // ── View switching ──
+  function showView() {
+    // Hide all containers
+    $('pageImg').classList.remove('loaded');
+    $('pageImg').style.display = 'none';
+    $('spreadContainer').classList.remove('active');
+    $('scrollContainer').classList.remove('active');
+
+    if (viewMode === 'single') {
+      $('pageImg').style.display = '';
+      loadSinglePage(currentPageIdx);
+    } else if (viewMode === 'spread') {
+      $('spreadContainer').classList.add('active');
+      loadSpreadPage(currentPageIdx);
+    } else if (viewMode === 'scroll') {
+      $('scrollContainer').classList.add('active');
+      loadScrollView();
+    }
+  }
+
+  function setViewMode(mode) {
+    viewMode = mode;
+    $('viewSingle').classList.toggle('active', mode === 'single');
+    $('viewSpread').classList.toggle('active', mode === 'spread');
+    $('viewScroll').classList.toggle('active', mode === 'scroll');
+    $('coverToggle').classList.toggle('active', coverIncluded);
+    $('coverToggle').style.opacity = mode === 'spread' ? '1' : '.4';
+    showView();
+  }
+
+  // ── Single page ──
+  async function loadSinglePage(idx) {
     if (idx < 0 || idx >= pages.length) return;
     currentPageIdx = idx;
     var pageNum = pages[idx].pageNum;
@@ -150,32 +179,234 @@
     updateTOCHighlight(pageNum);
 
     var img = $('pageImg');
-    if (pageCache.has(pageNum)) {
-      img.src = pageCache.get(pageNum);
+    var dataURL = await getPageData(pageNum);
+    if (dataURL) {
+      img.src = dataURL;
       img.classList.add('loaded');
+      img.style.display = '';
       hideStatus();
       applyFit();
     } else {
-      showStatus('페이지 ' + pageNum + ' 로딩 중...');
-      try {
-        var page = await extGetPage(bookId, pageNum);
-        if (page && page.dataURL) {
-          pageCache.set(pageNum, page.dataURL);
-          img.src = page.dataURL;
-          img.classList.add('loaded');
-          hideStatus();
-          applyFit();
-        } else {
-          showStatus('페이지 데이터 없음 (p' + pageNum + ')');
-        }
-      } catch (e) {
-        showStatus('로드 실패');
+      showStatus('페이지 데이터 없음 (p' + pageNum + ')');
+    }
+    prefetch(idx + 1);
+    prefetch(idx - 1);
+  }
+
+  // ── Spread (two-page) ──
+  function getSpreadPair(idx) {
+    // coverIncluded: page 0 alone, then pairs (1,2), (3,4), ...
+    // !coverIncluded: pairs (0,1), (2,3), ...
+    if (coverIncluded) {
+      if (idx === 0) return [0, -1]; // cover alone on right
+      var base = idx % 2 === 1 ? idx : idx - 1;
+      return [base, base + 1 < pages.length ? base + 1 : -1];
+    }
+    var base = idx % 2 === 0 ? idx : idx - 1;
+    return [base, base + 1 < pages.length ? base + 1 : -1];
+  }
+
+  async function loadSpreadPage(idx) {
+    if (idx < 0 || idx >= pages.length) return;
+    var pair = getSpreadPair(idx);
+    currentPageIdx = pair[0];
+    $('currentPage').value = pair[0] + 1;
+
+    var leftImg = $('spreadLeft');
+    var rightImg = $('spreadRight');
+    leftImg.classList.remove('loaded', 'placeholder');
+    rightImg.classList.remove('loaded', 'placeholder');
+
+    hideStatus();
+
+    // Cover alone: show only on right side
+    if (coverIncluded && pair[0] === 0 && pair[1] === -1) {
+      leftImg.classList.add('placeholder');
+      var data = await getPageData(pages[0].pageNum);
+      if (data) {
+        rightImg.src = data;
+        rightImg.classList.add('loaded');
       }
+      updateTOCHighlight(pages[0].pageNum);
+      applySpreadFit();
+      prefetch(1);
+      prefetch(2);
+      return;
     }
 
-    prefetch(idx + 1);
-    prefetch(idx + 2);
-    prefetch(idx - 1);
+    // Left page
+    var leftData = await getPageData(pages[pair[0]].pageNum);
+    if (leftData) {
+      leftImg.src = leftData;
+      leftImg.classList.add('loaded');
+    }
+
+    // Right page
+    if (pair[1] >= 0 && pair[1] < pages.length) {
+      var rightData = await getPageData(pages[pair[1]].pageNum);
+      if (rightData) {
+        rightImg.src = rightData;
+        rightImg.classList.add('loaded');
+      }
+    } else {
+      rightImg.classList.add('placeholder');
+    }
+
+    updateTOCHighlight(pages[pair[0]].pageNum);
+    applySpreadFit();
+    prefetch(pair[0] + 2);
+    prefetch(pair[0] + 3);
+  }
+
+  function applySpreadFit() {
+    var area = $('pageArea');
+    var maxW = area.clientWidth - 48;
+    var maxH = area.clientHeight - 48;
+    var leftImg = $('spreadLeft');
+    var rightImg = $('spreadRight');
+
+    if (fitMode === 'page') {
+      leftImg.style.maxHeight = maxH + 'px';
+      leftImg.style.maxWidth = (maxW / 2 - 4) + 'px';
+      leftImg.style.width = 'auto';
+      rightImg.style.maxHeight = maxH + 'px';
+      rightImg.style.maxWidth = (maxW / 2 - 4) + 'px';
+      rightImg.style.width = 'auto';
+    } else {
+      // Width fit: each page takes half
+      var halfW = (maxW / 2 - 4);
+      leftImg.style.width = halfW + 'px';
+      leftImg.style.maxHeight = 'none';
+      leftImg.style.maxWidth = 'none';
+      rightImg.style.width = halfW + 'px';
+      rightImg.style.maxHeight = 'none';
+      rightImg.style.maxWidth = 'none';
+    }
+  }
+
+  function navigateSpread(direction) {
+    var pair = getSpreadPair(currentPageIdx);
+    var nextIdx;
+    if (direction > 0) {
+      nextIdx = (pair[1] >= 0 ? pair[1] : pair[0]) + 1;
+    } else {
+      nextIdx = pair[0] - 1;
+      if (nextIdx >= 0) {
+        var prevPair = getSpreadPair(nextIdx);
+        nextIdx = prevPair[0];
+      }
+    }
+    if (nextIdx >= 0 && nextIdx < pages.length) {
+      loadSpreadPage(nextIdx);
+    }
+  }
+
+  // ── Scroll view ──
+  var scrollObserver = null;
+
+  function loadScrollView() {
+    var container = $('scrollContainer');
+    container.innerHTML = '';
+    hideStatus();
+
+    // Create lightweight placeholders first (no images loaded)
+    for (var i = 0; i < pages.length; i++) {
+      var wrapper = document.createElement('div');
+      wrapper.className = 'scroll-slot';
+      wrapper.dataset.idx = i;
+      wrapper.dataset.pagenum = pages[i].pageNum;
+      wrapper.dataset.loaded = 'false';
+      // Placeholder text
+      var label = document.createElement('span');
+      label.className = 'scroll-label';
+      label.textContent = pages[i].pageNum;
+      wrapper.appendChild(label);
+      container.appendChild(wrapper);
+    }
+
+    applyScrollFit();
+
+    // Lazy load with IntersectionObserver — only load nearby pages
+    if (scrollObserver) scrollObserver.disconnect();
+    scrollObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var slot = entry.target;
+        if (entry.isIntersecting) {
+          if (slot.dataset.loaded === 'false') {
+            slot.dataset.loaded = 'loading';
+            var pn = parseInt(slot.dataset.pagenum, 10);
+            getPageData(pn).then(function (dataURL) {
+              if (dataURL) {
+                var img = document.createElement('img');
+                img.className = 'scroll-page';
+                img.src = dataURL;
+                img.onload = function () {
+                  slot.innerHTML = '';
+                  slot.appendChild(img);
+                  slot.dataset.loaded = 'true';
+                  slot.classList.add('loaded');
+                  applyScrollFit();
+                };
+              }
+            });
+          }
+          // Update current page indicator
+          var idx = parseInt(slot.dataset.idx, 10);
+          $('currentPage').value = idx + 1;
+          $('pageSlider').value = idx + 1;
+          currentPageIdx = idx;
+          updateTOCHighlight(parseInt(slot.dataset.pagenum, 10));
+        }
+      });
+    }, { root: $('pageArea'), rootMargin: '600px 0px', threshold: 0.1 });
+
+    container.querySelectorAll('.scroll-slot').forEach(function (slot) {
+      scrollObserver.observe(slot);
+    });
+  }
+
+  function applyScrollFit() {
+    var area = $('pageArea');
+    var maxH = area.clientHeight - 32;
+    var maxW = area.clientWidth - 48;
+    // Apply to both slots (placeholder) and loaded images
+    var slots = $('scrollContainer').querySelectorAll('.scroll-slot');
+    var imgs = $('scrollContainer').querySelectorAll('.scroll-page');
+    if (fitMode === 'page') {
+      slots.forEach(function (s) { s.style.width = 'auto'; s.style.maxWidth = maxW + 'px'; s.style.minHeight = maxH * 0.6 + 'px'; });
+      imgs.forEach(function (img) {
+        img.style.maxHeight = maxH + 'px';
+        img.style.width = 'auto';
+        img.style.maxWidth = maxW + 'px';
+      });
+    } else if (fitMode === 'width') {
+      slots.forEach(function (s) { s.style.width = maxW + 'px'; s.style.maxWidth = 'none'; });
+      imgs.forEach(function (img) {
+        img.style.width = maxW + 'px';
+        img.style.maxHeight = 'none';
+        img.style.maxWidth = 'none';
+      });
+    } else {
+      slots.forEach(function (s) { s.style.width = zoom + '%'; s.style.maxWidth = 'none'; });
+      imgs.forEach(function (img) {
+        img.style.width = zoom + '%';
+        img.style.maxHeight = 'none';
+        img.style.maxWidth = 'none';
+      });
+    }
+  }
+
+  // ── Page data ──
+  async function getPageData(pageNum) {
+    if (pageCache.has(pageNum)) return pageCache.get(pageNum);
+    try {
+      var page = await extGetPage(bookId, pageNum);
+      if (page && page.dataURL) {
+        pageCache.set(pageNum, page.dataURL);
+        return page.dataURL;
+      }
+    } catch (e) {}
+    return null;
   }
 
   async function prefetch(idx) {
@@ -190,11 +421,15 @@
 
   // ── Fit / Zoom ──
   function applyFit() {
+    if (viewMode === 'spread') { applySpreadFit(); return; }
+    if (viewMode === 'scroll') { applyScrollFit(); return; }
+
     var img = $('pageImg');
     var area = $('pageArea');
     if (fitMode === 'width') {
       img.style.width = (area.clientWidth - 48) + 'px';
       img.style.maxHeight = 'none';
+      img.style.maxWidth = 'none';
     } else if (fitMode === 'page') {
       img.style.width = 'auto';
       img.style.maxWidth = (area.clientWidth - 48) + 'px';
@@ -251,22 +486,78 @@
 
   function goToPageNum(pageNum) {
     for (var i = 0; i < pages.length; i++) {
-      if (pages[i].pageNum >= pageNum) { loadPage(i); return; }
+      if (pages[i].pageNum >= pageNum) {
+        currentPageIdx = i;
+        if (viewMode === 'scroll') {
+          var el = $('scrollContainer').querySelector('[data-idx="' + i + '"]');
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+          showView();
+        }
+        return;
+      }
     }
   }
 
   function escHTML(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+  // ── Navigation ──
+  function navigate(direction) {
+    if (viewMode === 'spread') {
+      navigateSpread(direction);
+    } else if (viewMode === 'single') {
+      var next = currentPageIdx + direction;
+      if (next >= 0 && next < pages.length) loadSinglePage(next);
+    }
+  }
+
+  // ── Slider sync ──
+  function syncSlider() {
+    var slider = $('pageSlider');
+    slider.max = pages.length || 1;
+    slider.value = currentPageIdx + 1;
+  }
+
+  // ── Dark mode ──
+  var isDark = false;
+  function toggleDark() {
+    isDark = !isDark;
+    document.body.classList.toggle('dark', isDark);
+    $('darkToggle').classList.toggle('active', isDark);
+  }
+
+  // ── Fullscreen ──
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen().catch(function () {});
+    }
+  }
+
   // ── Events ──
-  $('prevPage').addEventListener('click', function () { loadPage(currentPageIdx - 1); });
-  $('nextPage').addEventListener('click', function () { loadPage(currentPageIdx + 1); });
+  $('prevPage').addEventListener('click', function () { navigate(-1); });
+  $('nextPage').addEventListener('click', function () { navigate(1); });
   $('currentPage').addEventListener('change', function () {
     var idx = parseInt(this.value, 10) - 1;
-    if (idx >= 0 && idx < pages.length) loadPage(idx);
-    else this.value = currentPageIdx + 1;
+    if (idx >= 0 && idx < pages.length) {
+      currentPageIdx = idx;
+      syncSlider();
+      showView();
+    } else {
+      this.value = currentPageIdx + 1;
+    }
   });
   $('currentPage').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') { this.blur(); this.dispatchEvent(new Event('change')); }
+  });
+  $('pageSlider').addEventListener('input', function () {
+    var idx = parseInt(this.value, 10) - 1;
+    if (idx >= 0 && idx < pages.length) {
+      currentPageIdx = idx;
+      $('currentPage').value = idx + 1;
+      showView();
+    }
   });
 
   $('zoomIn').addEventListener('click', function () { setZoom((fitMode === 'manual' ? zoom : 100) + 25); });
@@ -287,6 +578,69 @@
     applyFit();
   });
 
+  // View mode buttons
+  $('viewSingle').addEventListener('click', function () { setViewMode('single'); });
+  $('viewSpread').addEventListener('click', function () { setViewMode('spread'); });
+  $('viewScroll').addEventListener('click', function () { setViewMode('scroll'); });
+  $('coverToggle').addEventListener('click', function () {
+    coverIncluded = !coverIncluded;
+    this.classList.toggle('active', coverIncluded);
+    if (viewMode === 'spread') showView();
+  });
+
+  $('darkToggle').addEventListener('click', toggleDark);
+  $('fullscreenBtn').addEventListener('click', toggleFullscreen);
+
+  // Copy current page image to clipboard
+  $('copyImageBtn').addEventListener('click', async function () {
+    if (!pages.length) return;
+    var pn = pages[currentPageIdx].pageNum;
+    var dataURL = await getPageData(pn);
+    if (!dataURL) return;
+    try {
+      var res = await fetch(dataURL);
+      var blob = await res.blob();
+      var pngBlob = blob;
+      // Convert to PNG if needed
+      if (blob.type !== 'image/png') {
+        var img = new Image();
+        img.src = dataURL;
+        await new Promise(function (r) { img.onload = r; });
+        var c = document.createElement('canvas');
+        c.width = img.width; c.height = img.height;
+        c.getContext('2d').drawImage(img, 0, 0);
+        pngBlob = await new Promise(function (r) { c.toBlob(r, 'image/png'); });
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      flashBtn($('copyImageBtn'), '복사됨!');
+    } catch (e) {
+      flashBtn($('copyImageBtn'), '실패');
+    }
+  });
+
+  // Save current page image
+  $('saveImageBtn').addEventListener('click', async function () {
+    if (!pages.length) return;
+    var pn = pages[currentPageIdx].pageNum;
+    var dataURL = await getPageData(pn);
+    if (!dataURL) return;
+    var a = document.createElement('a');
+    a.href = dataURL;
+    var safe = (bookTitle || 'page').replace(/[\\/:*?"<>|]/g, '_').substring(0, 80);
+    var ext = dataURL.indexOf('image/png') !== -1 ? '.png' : '.jpg';
+    a.download = safe + '_p' + String(pn).padStart(4, '0') + ext;
+    a.click();
+    flashBtn($('saveImageBtn'), '저장됨!');
+  });
+
+  function flashBtn(btn, text) {
+    var span = btn.querySelector('span');
+    if (!span) return;
+    var orig = span.textContent;
+    span.textContent = text;
+    setTimeout(function () { span.textContent = orig; }, 1500);
+  }
+
   $('tocToggle').addEventListener('click', function () {
     tocVisible = !tocVisible;
     $('tocSidebar').classList.toggle('hidden', !tocVisible);
@@ -294,7 +648,22 @@
     setTimeout(applyFit, 260);
   });
 
-  $('downloadPDF').addEventListener('click', async function () {
+  // Download dropdown
+  $('downloadBtn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    $('dlDropdown').classList.toggle('open');
+  });
+  document.addEventListener('click', function () {
+    $('dlDropdown').classList.remove('open');
+  });
+  $('dlDropdown').addEventListener('click', function (e) { e.stopPropagation(); });
+
+  function getSelectedPdfSize() {
+    var checked = document.querySelector('input[name="pdfSize"]:checked');
+    return checked ? checked.value : 'original';
+  }
+
+  $('dlPdfBtn').addEventListener('click', async function () {
     if (!pages.length) return;
     var btn = this;
     btn.disabled = true;
@@ -319,7 +688,8 @@
       }
       if (allPages.length === 0) throw new Error('No pages');
 
-      var targetSize = SIZE_PRESETS[$('pdfSize').value] || null;
+      var sizeVal = getSelectedPdfSize();
+      var targetSize = SIZE_PRESETS[sizeVal] || null;
       var f = allPages[0];
       var dims0 = calcPageDims(f.width, f.height, targetSize);
       var pdf = new window.jspdf.jsPDF({
@@ -344,29 +714,49 @@
         } catch (e) {}
       }
       var safe = (bookTitle || 'ebook').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').replace(/^[\s.]+|[\s.]+$/g, '').slice(0, 200);
-      pdf.save((safe || 'ebook') + '.pdf');
+      var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
+      pdf.save((safe || 'ebook') + sizeSuffix + '.pdf');
+      $('dlDropdown').classList.remove('open');
     } catch (e) {
       alert('PDF 생성 실패: ' + e.message);
     }
     btn.disabled = false;
-    btn.textContent = '\uD83D\uDCC4';
+    btn.textContent = 'PDF 다운로드';
   });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', function (e) {
     if (e.target.tagName === 'INPUT') return;
     switch (e.key) {
-      case 'ArrowLeft': e.preventDefault(); loadPage(currentPageIdx - 1); break;
-      case 'ArrowRight': e.preventDefault(); loadPage(currentPageIdx + 1); break;
+      case 'ArrowLeft': e.preventDefault(); navigate(-1); break;
+      case 'ArrowRight': e.preventDefault(); navigate(1); break;
       case '+': case '=': e.preventDefault(); setZoom((fitMode === 'manual' ? zoom : 100) + 25); break;
       case '-': e.preventDefault(); setZoom((fitMode === 'manual' ? zoom : 100) - 25); break;
+      case 'w': case 'W': e.preventDefault(); $('fitWidth').click(); break;
+      case 'f': case 'F':
+        if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); $('fitPage').click(); }
+        break;
+      case 'd': case 'D': e.preventDefault(); toggleDark(); break;
+      case 'F11': e.preventDefault(); toggleFullscreen(); break;
     }
   });
 
-  window.addEventListener('resize', function () { if (fitMode !== 'manual') applyFit(); });
+  window.addEventListener('resize', function () {
+    if (fitMode !== 'manual') applyFit();
+  });
 
-  // Init
-  $('fitWidth').classList.add('active');
+  // Wrap original showView to sync slider
+  var _origShowView = showView;
+  showView = function () {
+    _origShowView();
+    syncSlider();
+  };
+
+  // Init — default to page fit (세로 맞춤)
+  fitMode = 'page';
+  $('fitPage').classList.add('active');
+  $('zoomText').textContent = '맞춤';
   $('tocToggle').classList.add('active');
+  $('coverToggle').classList.add('active');
   init();
 })();

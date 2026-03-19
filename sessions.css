@@ -499,6 +499,16 @@ body {
   background: #f3f4f6;
   border-color: #d1d5db;
 }
+.page-tile.failed {
+  background: #fef2f2;
+  color: #ef4444;
+  border: 1px solid #fca5a5;
+  font-weight: 700;
+}
+.page-tile.failed:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+}
 
 /* ── Modal ── */
 .modal-overlay {

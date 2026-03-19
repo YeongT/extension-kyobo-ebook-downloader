@@ -585,6 +585,19 @@
     }
   }
 
+  // Mark specific pages as failed (red) in the grid
+  function markPagesFailed(failedPages) {
+    var grid = $('pageGrid');
+    if (!grid) return;
+    for (var i = 0; i < failedPages.length; i++) {
+      var tile = grid.querySelector('[data-page="' + failedPages[i] + '"]');
+      if (tile) {
+        tile.className = 'page-tile failed';
+        tile.title = failedPages[i] + '페이지 (캡처 실패)';
+      }
+    }
+  }
+
   // Periodic DB refresh for page data (catches any missed real-time updates)
   function refreshPageDataIfNeeded() {
     if (!selectedBookId) return;
@@ -687,8 +700,17 @@
 
         case 'captureComplete':
           isScanning = false;
-          refreshBookData();
-          showToast('스캔 완료!');
+          refreshBookData().then(function () {
+            // Highlight failed pages in red
+            if (msg.data && msg.data.missingPages && msg.data.missingPages.length > 0) {
+              markPagesFailed(msg.data.missingPages);
+            }
+          });
+          if (msg.data && msg.data.missing > 0) {
+            showToast('스캔 완료 - ' + msg.data.missing + '개 페이지 누락');
+          } else {
+            showToast('스캔 완료!');
+          }
           break;
 
         case 'captureStopped':
@@ -789,7 +811,8 @@
       }
 
       updateProgress(100, '파일 저장 중...');
-      pdf.save(sanitizeFilename(title) + '.pdf');
+      var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
+      pdf.save(sanitizeFilename(title) + sizeSuffix + '.pdf');
       hideProgress();
       showToast('PDF 저장 완료!');
     } catch (e) {

@@ -284,11 +284,10 @@
 
   // ── Settings ──
   function loadSettings() {
-    chrome.storage.local.get({ autoRetry: true, pageDelayMin: 800, pageDelayMax: 1500, captureDelay: 500 }, function (d) {
+    chrome.storage.local.get({ autoRetry: true, pageDelayMin: 800, pageDelayMax: 1500 }, function (d) {
       $('autoRetry').checked = d.autoRetry !== false;
       $('sPageDelayMin').value = d.pageDelayMin;
       $('sPageDelayMax').value = d.pageDelayMax;
-      $('captureDelay').value = d.captureDelay;
     });
   }
 
@@ -296,12 +295,11 @@
     chrome.storage.local.set({
       autoRetry: $('autoRetry').checked,
       pageDelayMin: parseInt($('sPageDelayMin').value, 10) || 800,
-      pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500,
-      captureDelay: parseInt($('captureDelay').value, 10) || 500
+      pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500
     });
   }
 
-  ['sPageDelayMin', 'sPageDelayMax', 'captureDelay'].forEach(function (id) {
+  ['sPageDelayMin', 'sPageDelayMax'].forEach(function (id) {
     var el = $(id);
     if (el) el.addEventListener('change', saveSettings);
   });

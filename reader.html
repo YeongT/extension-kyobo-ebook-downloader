@@ -12,15 +12,54 @@
     <div class="toolbar-left">
       <span class="reader-title" id="readerTitle">eBook Reader</span>
     </div>
+    <div class="toolbar-center">
+      <div class="view-modes">
+        <button class="vm-btn" id="tocToggle" title="목차">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+        </button>
+        <div class="vm-sep"></div>
+        <button class="vm-btn active" id="viewSingle" title="한 페이지">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="1" width="8" height="14" rx="1"/></svg>
+        </button>
+        <button class="vm-btn" id="viewSpread" title="두 페이지">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2" width="6" height="12" rx="1"/><rect x="9" y="2" width="6" height="12" rx="1"/></svg>
+        </button>
+        <button class="vm-btn" id="viewScroll" title="스크롤">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="0.5" width="8" height="5" rx="1"/><rect x="4" y="6.5" width="8" height="5" rx="1" opacity=".6"/><rect x="4" y="12.5" width="8" height="5" rx="1" opacity=".3"/></svg>
+        </button>
+        <div class="vm-sep"></div>
+        <button class="vm-btn" id="coverToggle" title="표지 포함 (두 페이지 모드)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="1" width="10" height="14" rx="1.5"/><line x1="6" y1="4" x2="10" y2="4"/><line x1="6" y1="7" x2="10" y2="7"/></svg>
+        </button>
+      </div>
+    </div>
     <div class="toolbar-right">
-      <button class="tb-btn" id="tocToggle" title="목차">&#9776;</button>
-      <select id="pdfSize" class="tb-select" title="PDF 크기">
-        <option value="original">원본</option>
-        <option value="a4">A4</option>
-        <option value="b5">B5</option>
-        <option value="a5">A5</option>
-      </select>
-      <button class="tb-btn" id="downloadPDF" title="PDF 다운로드">&#128196;</button>
+      <!-- Copy current page image -->
+      <button class="action-btn" id="copyImageBtn" title="현재 페이지 복사">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+        <span>복사</span>
+      </button>
+      <!-- Download current page image -->
+      <button class="action-btn" id="saveImageBtn" title="현재 페이지 저장">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>저장</span>
+      </button>
+      <!-- Download all as PDF -->
+      <div class="dl-wrapper">
+        <button class="action-btn accent" id="downloadBtn" title="PDF 다운로드">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/></svg>
+          <span>PDF</span>
+        </button>
+        <div class="dl-dropdown" id="dlDropdown">
+          <div class="dl-section">용지 크기</div>
+          <label class="dl-option"><input type="radio" name="pdfSize" value="original" checked> 원본 크기</label>
+          <label class="dl-option"><input type="radio" name="pdfSize" value="a4"> A4</label>
+          <label class="dl-option"><input type="radio" name="pdfSize" value="b5"> B5</label>
+          <label class="dl-option"><input type="radio" name="pdfSize" value="a5"> A5</label>
+          <div class="dl-divider"></div>
+          <button class="dl-action" id="dlPdfBtn">PDF 다운로드</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -35,28 +74,64 @@
     <!-- Page area -->
     <div class="page-area" id="pageArea">
       <div class="page-status" id="pageStatus">도서를 불러오는 중...</div>
+      <!-- Single page mode -->
       <img class="page-img" id="pageImg" alt="Page">
+      <!-- Spread mode -->
+      <div class="spread-container" id="spreadContainer">
+        <img class="spread-img" id="spreadLeft" alt="Left">
+        <img class="spread-img" id="spreadRight" alt="Right">
+      </div>
+      <!-- Scroll mode -->
+      <div class="scroll-container" id="scrollContainer"></div>
     </div>
   </div>
 
-  <!-- Navigation bar -->
-  <div class="nav-bar">
-    <div class="nav-section">
-      <button class="nav-btn" id="prevPage" title="이전 (←)">&#9664;</button>
-      <div class="page-info">
+  <!-- Control bar -->
+  <div class="ctrl-bar" id="navBar">
+    <!-- Page nav -->
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="prevPage" title="이전 페이지 (←)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+      <div class="page-indicator">
         <input type="number" id="currentPage" value="1" min="1">
-        <span class="page-sep">/</span>
+        <span class="page-of">of</span>
         <span id="totalPages">0</span>
       </div>
-      <button class="nav-btn" id="nextPage" title="다음 (→)">&#9654;</button>
+      <button class="ctrl-btn" id="nextPage" title="다음 페이지 (→)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
     </div>
-    <div class="nav-divider"></div>
-    <div class="nav-section">
-      <button class="nav-btn" id="zoomOut" title="축소 (-)">&#8722;</button>
-      <span class="zoom-text" id="zoomText">너비</span>
-      <button class="nav-btn" id="zoomIn" title="확대 (+)">&#43;</button>
-      <button class="nav-btn fit-btn" id="fitWidth" title="너비 맞춤">&#8596;</button>
-      <button class="nav-btn fit-btn" id="fitPage" title="페이지 맞춤">&#11036;</button>
+    <!-- Page slider -->
+    <div class="ctrl-group slider-group">
+      <input type="range" class="page-slider" id="pageSlider" min="1" max="1" value="1">
+    </div>
+    <div class="ctrl-sep"></div>
+    <!-- Zoom -->
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="zoomOut" title="축소 (-)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </button>
+      <span class="zoom-label" id="zoomText">너비</span>
+      <button class="ctrl-btn" id="zoomIn" title="확대 (+)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+      </button>
+      <button class="ctrl-btn" id="fitWidth" title="너비 맞춤 (W)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"/><polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/></svg>
+      </button>
+      <button class="ctrl-btn" id="fitPage" title="페이지 맞춤 (F)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="9 3 9 9 3 9"/><polyline points="15 3 15 9 21 9"/><polyline points="9 21 9 15 3 15"/><polyline points="15 21 15 15 21 15"/></svg>
+      </button>
+    </div>
+    <div class="ctrl-sep"></div>
+    <!-- Utility -->
+    <div class="ctrl-group">
+      <button class="ctrl-btn" id="darkToggle" title="다크 모드 (D)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
+      </button>
+      <button class="ctrl-btn" id="fullscreenBtn" title="전체 화면 (Esc)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      </button>
     </div>
   </div>
 
