@@ -284,8 +284,9 @@
 
   // ── Settings ──
   function loadSettings() {
-    chrome.storage.local.get({ autoRetry: true, pageDelayMin: 800, pageDelayMax: 1500 }, function (d) {
+    chrome.storage.local.get({ autoRetry: true, autoRetryBlank: false, pageDelayMin: 800, pageDelayMax: 1500 }, function (d) {
       $('autoRetry').checked = d.autoRetry !== false;
+      $('autoRetryBlank').checked = !!d.autoRetryBlank;
       $('sPageDelayMin').value = d.pageDelayMin;
       $('sPageDelayMax').value = d.pageDelayMax;
     });
@@ -294,6 +295,7 @@
   function saveSettings() {
     chrome.storage.local.set({
       autoRetry: $('autoRetry').checked,
+      autoRetryBlank: $('autoRetryBlank').checked,
       pageDelayMin: parseInt($('sPageDelayMin').value, 10) || 800,
       pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500
     });
@@ -303,8 +305,10 @@
     var el = $(id);
     if (el) el.addEventListener('change', saveSettings);
   });
-  var arEl = $('autoRetry');
-  if (arEl) arEl.addEventListener('change', saveSettings);
+  ['autoRetry', 'autoRetryBlank'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener('change', saveSettings);
+  });
 
   // ── Helpers ──
   function sendToTab(tabId, msg) {

@@ -100,22 +100,60 @@
         <div class="grid-section" id="tocSection" hidden>
           <div class="grid-header collapsible" id="tocToggle">
             <span id="tocLabel">목차</span>
+            <span style="flex:1"></span>
+            <button class="toc-action-btn" id="tocRescanBtn" title="뷰어에서 목차 재스캔">재스캔</button>
+            <button class="toc-action-btn" id="tocEditBtn" title="목차 직접 편집">편집</button>
             <span class="collapse-icon" id="tocIcon">▾</span>
           </div>
           <div id="tocList" class="toc-list"></div>
+        </div>
+
+    <!-- TOC Edit Modal (fixed overlay, outside main content flow) -->
+    <div class="toc-edit-overlay" id="tocEditOverlay" hidden>
+      <div class="toc-edit-backdrop" id="tocEditBackdrop"></div>
+      <div class="toc-edit-modal">
+        <div class="toc-edit-header">
+          <span>목차 편집</span>
+          <div class="toc-edit-header-actions">
+            <button class="toc-edit-add" id="tocAddBtn" title="항목 추가">+ 추가</button>
+            <button class="toc-edit-close" id="tocEditClose">✕</button>
+          </div>
+        </div>
+        <div class="toc-edit-list" id="tocEditList"></div>
+        <div class="toc-edit-footer">
+          <span class="toc-edit-status" id="tocEditStatus"></span>
+          <button class="toc-edit-save" id="tocEditSave">저장</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- Missing ranges -->
+        <div class="grid-section" id="missingSection" hidden>
+          <div class="grid-header">
+            <span id="missingLabel">누락 구간</span>
+            <span style="flex:1"></span>
+            <button class="grid-sel-btn rescan-all-btn" id="rescanAllBtn">전체 재시도</button>
+          </div>
+          <div class="missing-ranges" id="missingRanges"></div>
         </div>
 
         <!-- Page Grid -->
         <div class="grid-section" id="gridSection">
           <div class="grid-header collapsible" id="gridToggle">
             <span id="gridLabel">페이지 맵</span>
-            <div style="display:flex;align-items:center;gap:12px">
-              <div class="grid-legend">
-                <span class="legend-item"><span class="legend-dot captured"></span>캡처됨</span>
-                <span class="legend-item"><span class="legend-dot missing"></span>누락</span>
-              </div>
-              <span class="collapse-icon" id="gridIcon">▾</span>
-            </div>
+            <span class="collapse-icon" id="gridIcon">▾</span>
+          </div>
+          <div class="grid-filters" id="gridFilters">
+            <button class="grid-filter active" data-filter="all">전체</button>
+            <button class="grid-filter" data-filter="captured">정상</button>
+            <button class="grid-filter" data-filter="suspect">의심</button>
+            <button class="grid-filter" data-filter="missing">미완료</button>
+            <button class="grid-filter" data-filter="failed">실패</button>
+            <span style="flex:1"></span>
+            <button class="grid-sel-btn" id="selectAllBtn">전체 선택</button>
+            <button class="grid-sel-btn" id="deselectAllBtn">해제</button>
+            <button class="grid-batch-btn confirm" id="batchConfirmBtn" hidden>정상 확인</button>
+            <button class="grid-batch-btn danger" id="batchDeleteBtn" hidden>삭제</button>
           </div>
           <div class="page-grid" id="pageGrid"></div>
         </div>
@@ -144,7 +182,10 @@
       </div>
       <div class="modal-footer">
         <span id="modalInfo"></span>
-        <button class="action-btn danger small" id="deletePageBtn">이 페이지 삭제</button>
+        <div class="modal-actions">
+          <button class="status-btn ok" id="markNormalBtn" title="정상으로 확인">정상 확인</button>
+          <button class="action-btn danger small" id="deletePageBtn">삭제 (재캡처)</button>
+        </div>
       </div>
     </div>
   </div>

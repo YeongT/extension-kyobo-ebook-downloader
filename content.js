@@ -158,21 +158,26 @@
     } else if (curPage > 0 && targetPage === curPage - 1) {
       await callInject('prevPage');
     } else {
-      // Need a jump — try goToPage first
-      try {
-        await callInject('goToPage', { pageNum: targetPage });
-      } catch (e) {}
-      // If goToPage didn't work, try sequential for small gaps
-      await delay(500);
-      var afterJump = 0;
-      try { afterJump = await callInject('getViewerPageNum'); } catch (e2) {}
-      if (afterJump > 0 && afterJump !== targetPage) {
-        var gap = targetPage - afterJump;
-        if (Math.abs(gap) <= 10) {
-          var step = gap > 0 ? 'nextPage' : 'prevPage';
-          for (var s = 0; s < Math.abs(gap); s++) {
-            await callInject(step);
-            await delay(400);
+      // Need a jump — try goToPage with longer wait
+      for (var jumpAttempt = 0; jumpAttempt < 2; jumpAttempt++) {
+        try {
+          await callInject('goToPage', { pageNum: targetPage });
+        } catch (e) {}
+        // Wait longer for jump navigation to settle (especially for large jumps)
+        await delay(800 + Math.min(Math.abs(targetPage - curPage), 50) * 10);
+        var afterJump = 0;
+        try { afterJump = await callInject('getViewerPageNum'); } catch (e2) {}
+        if (afterJump === targetPage) break;
+        // Sequential fallback for small remaining gaps
+        if (afterJump > 0 && afterJump !== targetPage) {
+          var gap = targetPage - afterJump;
+          if (Math.abs(gap) <= 15) {
+            var step = gap > 0 ? 'nextPage' : 'prevPage';
+            for (var s = 0; s < Math.abs(gap); s++) {
+              await callInject(step);
+              await delay(350);
+            }
+            break;
           }
         }
       }
@@ -182,21 +187,21 @@
     await delay(600);
 
     // 5. Verify the viewer's page indicator matches
-    var verified = await verifyPageNum(targetPage, 6000);
+    var verified = await verifyPageNum(targetPage, 8000);
     if (!verified) {
-      // One more try: goToPage + sequential fallback
+      // Final attempt: goToPage + sequential
       try { await callInject('goToPage', { pageNum: targetPage }); } catch (e) {}
-      await delay(500);
+      await delay(1000);
       var cur2 = 0;
       try { cur2 = await callInject('getViewerPageNum'); } catch (e) {}
-      if (cur2 > 0 && cur2 !== targetPage && Math.abs(targetPage - cur2) <= 5) {
+      if (cur2 > 0 && cur2 !== targetPage && Math.abs(targetPage - cur2) <= 15) {
         var step2 = targetPage > cur2 ? 'nextPage' : 'prevPage';
         for (var s2 = 0; s2 < Math.abs(targetPage - cur2); s2++) {
           await callInject(step2);
-          await delay(400);
+          await delay(350);
         }
       }
-      verified = await verifyPageNum(targetPage, 3000);
+      verified = await verifyPageNum(targetPage, 4000);
       if (!verified) return { ok: false, error: 'navigation_failed_page_' + targetPage };
     }
 
@@ -992,6 +997,43 @@
       }
 
       showMissingPages(missingPages);
+
+      // ── Auto-retry blank pages ──
+      if (!shouldStop && captured > 0) {
+        var doBlankRetry = false;
+        try {
+          var blankSettings = await new Promise(function (resolve) {
+            chrome.storage.local.get({ autoRetryBlank: false }, function (d) { resolve(d); });
+          });
+          doBlankRetry = !!blankSettings.autoRetryBlank;
+        } catch (e) {}
+
+        if (doBlankRetry) {
+          var blankPages = [];
+          try {
+            var checkResult = await callInject('findBlankPages', { startPage: startPage, endPage: endPage });
+            if (checkResult && checkResult.length > 0) blankPages = checkResult;
+          } catch (e) {}
+
+          if (blankPages.length > 0) {
+            showToast(blankPages.length + '개 빈 페이지 감지 - 자동 재시도...', 4000);
+            notifyPopup('captureProgress', { current: totalCached, total: total, message: blankPages.length + '개 빈 페이지 재시도 중...' });
+
+            for (var bi = 0; bi < blankPages.length && !shouldStop; bi++) {
+              var bp = blankPages[bi];
+              await delay(liveSettings.dMin);
+              if (document.hidden) { await focusViewerTab(); await delay(400); }
+              var bResult = await navigateAndCapture(bp);
+              if (bResult && bResult.ok) {
+                if (bResult.dataURL) {
+                  forwardToBackground('cachePage', { bookId: bResult.bookId, pageNum: bResult.pageNum, dataURL: bResult.dataURL, width: bResult.width, height: bResult.height });
+                }
+                updateO(totalCached, total, bp);
+              }
+            }
+          }
+        }
+      }
 
       if (captured > 0 && !shouldStop) {
         var isComplete = missingPages.length === 0 && totalCached >= total;

@@ -241,28 +241,68 @@
 
   function getTOC() {
     var items = [];
-    // Try both selectors
-    var els = document.querySelectorAll('[id^="pdfList_"]');
-    if (els.length === 0) els = document.querySelectorAll('.lbook_sphitem');
 
-    els.forEach(function (el) {
-      try {
-        var pn = el.querySelector('.lbook_spnum');
-        var ti = el.querySelector('.lbook_sdep_in');
-        if (!pn || !ti) return;
+    // Strategy 1: PDF viewer outline (nested <li> with .depth2 containers)
+    var outlineContainer = document.querySelector('#outlineView, .treeView, [class*="outline"]');
+    if (outlineContainer) {
+      var lis = outlineContainer.querySelectorAll('li');
+      lis.forEach(function (li) {
+        // Skip container-only <li> elements (they only hold children)
+        var hasDirectText = false;
+        var titleEl = li.querySelector('.chapter, a, span');
+        var pageEl = li.querySelector('.percent, .page');
+        if (!titleEl && !pageEl) {
+          // Check if li itself has meaningful text (not just child containers)
+          var text = '';
+          for (var n = 0; n < li.childNodes.length; n++) {
+            if (li.childNodes[n].nodeType === 3) text += li.childNodes[n].textContent.trim();
+          }
+          if (!text) return;
+        }
 
+        var title = titleEl ? titleEl.textContent.trim() : li.textContent.trim();
+        var pageNum = 0;
+        if (pageEl) pageNum = parseInt(pageEl.textContent.trim(), 10) || 0;
+
+        // Skip if no title or it's a container class only
+        if (!title || li.className === 'depth2') return;
+
+        // Detect depth by counting .depth2 ancestors
         var depth = 1;
-        // Walk up from the item to find depth class on any ancestor
-        var depEl = el.querySelector('.lbook_sdep') || el;
-        var cls = (depEl.className || '') + ' ' + (el.className || '');
-        if (cls.indexOf('dep3') !== -1) depth = 3;
-        else if (cls.indexOf('dep2') !== -1) depth = 2;
+        var parent = li.parentElement;
+        while (parent && parent !== outlineContainer) {
+          if (parent.classList && parent.classList.contains('depth2')) depth++;
+          parent = parent.parentElement;
+        }
 
-        items.push({ page: parseInt(pn.textContent.trim(), 10) || 0, title: ti.textContent.trim(), depth: depth });
-      } catch (e) {}
-    });
+        items.push({ page: pageNum, title: title, depth: depth });
+      });
+    }
 
-    // Fallback: if all depth=1, infer from title patterns
+    // Strategy 2: lbook_sdep with depN classes (flat <li> list, depth via class)
+    if (items.length === 0) {
+      var els = document.querySelectorAll('[id^="pdfList_"]');
+      if (els.length === 0) els = document.querySelectorAll('.lbook_sphitem');
+
+      els.forEach(function (el) {
+        try {
+          var pn = el.querySelector('.lbook_spnum');
+          var ti = el.querySelector('.lbook_sdep_in');
+          if (!pn || !ti) return;
+
+          var depth = 1;
+          var depEl = el.querySelector('.lbook_sdep') || el;
+          var cls = (depEl.className || '') + ' ' + (el.className || '');
+          // Match dep1, dep2, dep3, dep4, dep5, etc.
+          var depMatch = cls.match(/\bdep(\d+)\b/);
+          if (depMatch) depth = parseInt(depMatch[1], 10) || 1;
+
+          items.push({ page: parseInt(pn.textContent.trim(), 10) || 0, title: ti.textContent.trim(), depth: depth });
+        } catch (e) {}
+      });
+    }
+
+    // Fallback: infer depth from title patterns
     if (items.length > 0 && items.every(function (it) { return it.depth === 1; })) {
       var hasChapter = items.some(function (it) { return /^(CHAPTER|PART|챕터|파트)\s/i.test(it.title); });
       if (hasChapter) {
@@ -917,6 +957,23 @@
           resp.data = exists;
           send();
         }).catch(function () { resp.data = false; send(); });
+        break;
+      case 'findBlankPages':
+        var fbStart = event.data.startPage || 1;
+        var fbEnd = event.data.endPage || 0;
+        getCachedPages(getBookId()).then(function (allPages) {
+          var blanks = [];
+          allPages.forEach(function (pg) {
+            if (pg.pageNum < fbStart || pg.pageNum > fbEnd) return;
+            if (!pg.dataURL || pg.dataURL.length < 2000) { blanks.push(pg.pageNum); return; }
+            // Quick size heuristic: very small data for given dimensions = likely blank
+            var expectedMin = (pg.width || 100) * (pg.height || 100) * 0.01;
+            var actualSize = pg.dataURL.length * 0.75; // base64 overhead
+            if (actualSize < expectedMin) blanks.push(pg.pageNum);
+          });
+          resp.data = blanks;
+          send();
+        }).catch(function () { resp.data = []; send(); });
         break;
       case 'ping': resp.data = 'pong'; send(); break;
       default: resp.error = 'Unknown action'; send();

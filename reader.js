@@ -126,6 +126,7 @@
       pages = pagesInfo;
       $('totalPages').textContent = pages.length;
       $('currentPage').max = pages.length;
+      populateChapterDropdown();
       showView();
     } catch (e) {
       showStatus('로드 실패: ' + e.message);
@@ -501,6 +502,47 @@
 
   function escHTML(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+  // ── Chapter dropdown for PDF export ──
+  function populateChapterDropdown() {
+    var sel = $('dlRange');
+    sel.innerHTML = '<option value="all">전체 (' + pages.length + '페이지)</option>';
+    if (!toc || toc.length === 0) return;
+
+    // Build chapter ranges from depth-1 TOC items
+    var chapters = [];
+    for (var i = 0; i < toc.length; i++) {
+      if (toc[i].depth === 1) {
+        chapters.push({ title: toc[i].title, startPage: toc[i].page, endPage: 0 });
+      }
+    }
+    // Calculate end pages
+    for (var j = 0; j < chapters.length; j++) {
+      if (j + 1 < chapters.length) {
+        chapters[j].endPage = chapters[j + 1].startPage - 1;
+      } else {
+        // Last chapter goes to last page
+        var lastPageNum = pages.length > 0 ? pages[pages.length - 1].pageNum : 0;
+        chapters[j].endPage = lastPageNum;
+      }
+    }
+
+    for (var k = 0; k < chapters.length; k++) {
+      var ch = chapters[k];
+      var pageCount = ch.endPage - ch.startPage + 1;
+      var opt = document.createElement('option');
+      opt.value = ch.startPage + '-' + ch.endPage;
+      opt.textContent = ch.title + ' (p' + ch.startPage + '-' + ch.endPage + ', ' + pageCount + 'p)';
+      sel.appendChild(opt);
+    }
+  }
+
+  function getSelectedPageRange() {
+    var val = $('dlRange').value;
+    if (val === 'all') return null; // all pages
+    var parts = val.split('-');
+    return { start: parseInt(parts[0], 10), end: parseInt(parts[1], 10) };
+  }
+
   // ── Navigation ──
   function navigate(direction) {
     if (viewMode === 'spread') {
@@ -676,13 +718,21 @@
         await new Promise(function (res, rej) { s.onload = res; s.onerror = rej; });
       }
 
+      var range = getSelectedPageRange();
+      var targetPages = pages;
+      if (range) {
+        targetPages = pages.filter(function (pg) {
+          return pg.pageNum >= range.start && pg.pageNum <= range.end;
+        });
+      }
+
       var allPages = [];
-      for (var i = 0; i < pages.length; i++) {
+      for (var i = 0; i < targetPages.length; i++) {
         var p;
-        if (pageCache.has(pages[i].pageNum)) {
-          p = { dataURL: pageCache.get(pages[i].pageNum), width: pages[i].width, height: pages[i].height };
+        if (pageCache.has(targetPages[i].pageNum)) {
+          p = { dataURL: pageCache.get(targetPages[i].pageNum), width: targetPages[i].width, height: targetPages[i].height };
         } else {
-          p = await extGetPage(bookId, pages[i].pageNum);
+          p = await extGetPage(bookId, targetPages[i].pageNum);
         }
         if (p && p.dataURL) allPages.push(p);
       }
@@ -703,11 +753,11 @@
       }
       if (toc && toc.length > 0 && pdf.outline) {
         try {
-          var firstPage = pages[0].pageNum, lastPage = pages[pages.length - 1].pageNum;
+          var fpn = targetPages[0].pageNum, lpn = targetPages[targetPages.length - 1].pageNum;
           toc.forEach(function (item) {
-            if (item.page >= firstPage && item.page <= lastPage) {
-              for (var k = 0; k < pages.length; k++) {
-                if (pages[k].pageNum >= item.page) { pdf.outline.add(null, item.title, { pageNumber: k + 1 }); break; }
+            if (item.page >= fpn && item.page <= lpn) {
+              for (var k = 0; k < targetPages.length; k++) {
+                if (targetPages[k].pageNum >= item.page) { pdf.outline.add(null, item.title, { pageNumber: k + 1 }); break; }
               }
             }
           });
@@ -715,7 +765,8 @@
       }
       var safe = (bookTitle || 'ebook').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').replace(/^[\s.]+|[\s.]+$/g, '').slice(0, 200);
       var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
-      pdf.save((safe || 'ebook') + sizeSuffix + '.pdf');
+      var rangeSuffix = range ? '_p' + range.start + '-' + range.end : '';
+      pdf.save((safe || 'ebook') + rangeSuffix + sizeSuffix + '.pdf');
       $('dlDropdown').classList.remove('open');
     } catch (e) {
       alert('PDF 생성 실패: ' + e.message);

@@ -171,13 +171,17 @@
 
   // ── Select a book ──
   async function selectBook(bookId) {
+    gridLoadAbort = true; // cancel any running thumbnail load
+    thumbCache = {};
     selectedBookId = bookId;
     selectedBook = null;
     capturedPageNums = [];
+    confirmedPages = {};
 
     $('emptyState').hidden = true;
     $('bookDetail').hidden = false;
 
+    loadConfirmedPages();
     renderBookList();
 
     try {
@@ -266,6 +270,7 @@
     // TOC
     renderTOC();
 
+    renderMissingRanges();
     renderPageGrid();
     renderScanControls();
   }
@@ -306,7 +311,10 @@
     });
   }
 
-  // ── Render page grid ──
+  // ── Render page grid with thumbnails ──
+  var thumbCache = {}; // pageNum → dataURL (small)
+  var gridLoadAbort = false;
+
   function renderPageGrid() {
     var grid = $('pageGrid');
     var totalPages = (selectedBook && selectedBook.totalPages) || 0;
@@ -322,20 +330,204 @@
     var html = '';
     for (var p = 1; p <= totalPages; p++) {
       var isCaptured = !!capturedSet[p];
-      html += '<div class="page-tile ' + (isCaptured ? 'captured' : 'missing') + '" data-page="' + p + '" title="' + p + '페이지' + (isCaptured ? '' : ' (누락)') + '">' + p + '</div>';
+      html += '<div class="page-tile ' + (isCaptured ? 'captured' : 'missing') + '" data-page="' + p + '" data-loaded="false" title="' + p + '페이지' + (isCaptured ? '' : ' (누락)') + '">' +
+        '<input type="checkbox" class="tile-check" data-page="' + p + '">' +
+        '<span class="tile-num">' + p + '</span>' +
+      '</div>';
     }
     grid.innerHTML = html;
 
     grid.querySelectorAll('.page-tile.captured').forEach(function (tile) {
-      tile.addEventListener('click', function () {
+      tile.addEventListener('click', function (e) {
+        if (e.target.classList.contains('tile-check')) return;
         openPreview(parseInt(this.dataset.page, 10));
       });
     });
 
     $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
+
+    // Load thumbnails — skip full inspection if no changes
+    loadAllThumbnails();
+  }
+
+  // Persisted inspection results
+  var inspectionData = null; // { count, suspectPages, thumbs }
+
+  function getInspectionKey() { return 'inspection_' + selectedBookId; }
+
+  function loadInspection() {
+    return new Promise(function (resolve) {
+      chrome.storage.local.get(getInspectionKey(), function (d) {
+        resolve(d[getInspectionKey()] || null);
+      });
+    });
+  }
+
+  function saveInspection(suspectPages, thumbs) {
+    var obj = {};
+    obj[getInspectionKey()] = {
+      count: capturedPageNums.length,
+      suspectPages: suspectPages,
+      thumbs: thumbs, // { pageNum: thumbDataURL }
+      timestamp: Date.now()
+    };
+    chrome.storage.local.set(obj);
+  }
+
+  function clearInspection() {
+    chrome.storage.local.remove(getInspectionKey());
+    inspectionData = null;
+    thumbCache = {};
+  }
+
+  async function loadAllThumbnails() {
+    var captured = capturedPageNums.slice();
+    if (captured.length === 0) return;
+
+    // Check if we already have valid inspection data
+    var stored = await loadInspection();
+    if (stored && stored.count === captured.length) {
+      // No changes — apply stored results without re-inspecting
+      inspectionData = stored;
+      applyStoredInspection(stored);
+      return;
+    }
+
+    // Changes detected — run full inspection
+    gridLoadAbort = false;
+    showProgress('페이지 검사 중...', 0);
+    var suspectPages = [];
+    var thumbs = {};
+
+    for (var i = 0; i < captured.length; i++) {
+      if (gridLoadAbort) break;
+      var pn = captured[i];
+      var tile = $('pageGrid').querySelector('[data-page="' + pn + '"]');
+      if (!tile) continue;
+
+      updateProgress(Math.round((i / captured.length) * 100), (i + 1) + '/' + captured.length + ' 검사 중...');
+
+      try {
+        var pg = await extGetPage(selectedBookId, pn);
+        if (!pg || !pg.dataURL) continue;
+
+        var thumbURL = await createThumbnail(pg.dataURL, 160);
+        thumbCache[pn] = thumbURL;
+        thumbs[pn] = thumbURL;
+
+        var img = document.createElement('img');
+        img.className = 'tile-thumb';
+        img.src = thumbURL;
+        tile.insertBefore(img, tile.firstChild);
+        tile.dataset.loaded = 'true';
+
+        if (!confirmedPages[pn]) {
+          var isBlank = await checkBlankFromData(pg.dataURL);
+          if (isBlank) {
+            tile.classList.remove('captured');
+            tile.classList.add('suspect');
+            tile.title = pn + '페이지 (빈 페이지 의심)';
+            suspectPages.push(pn);
+          }
+        }
+      } catch (e) {}
+    }
+
+    hideProgress();
+    if (!gridLoadAbort) {
+      saveInspection(suspectPages, thumbs);
+      if (suspectPages.length > 0) {
+        showToast(suspectPages.length + '개 빈 페이지 의심 감지됨');
+      }
+    }
+  }
+
+  function applyStoredInspection(stored) {
+    var grid = $('pageGrid');
+    // Apply thumbnails
+    if (stored.thumbs) {
+      Object.keys(stored.thumbs).forEach(function (pn) {
+        var tile = grid.querySelector('[data-page="' + pn + '"]');
+        if (!tile || tile.dataset.loaded === 'true') return;
+        thumbCache[pn] = stored.thumbs[pn];
+        var img = document.createElement('img');
+        img.className = 'tile-thumb';
+        img.src = stored.thumbs[pn];
+        tile.insertBefore(img, tile.firstChild);
+        tile.dataset.loaded = 'true';
+      });
+    }
+    // Apply suspect status
+    if (stored.suspectPages) {
+      stored.suspectPages.forEach(function (pn) {
+        if (confirmedPages[pn]) return;
+        var tile = grid.querySelector('[data-page="' + pn + '"]');
+        if (tile) {
+          tile.classList.remove('captured');
+          tile.classList.add('suspect');
+          tile.title = pn + '페이지 (빈 페이지 의심)';
+        }
+      });
+    }
+  }
+
+  function createThumbnail(dataURL, maxW) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(maxW / img.width, 1);
+        var c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.5));
+      };
+      img.onerror = function () { resolve(dataURL); };
+      img.src = dataURL;
+    });
+  }
+
+  function checkBlankFromData(dataURL) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var c = document.createElement('canvas');
+          var size = 32;
+          c.width = size; c.height = size;
+          c.getContext('2d').drawImage(img, 0, 0, size, size);
+          var data = c.getContext('2d').getImageData(0, 0, size, size).data;
+          var whiteCount = 0;
+          for (var i = 0; i < data.length; i += 4) {
+            if (data[i] > 245 && data[i + 1] > 245 && data[i + 2] > 245) whiteCount++;
+          }
+          resolve(whiteCount / (size * size) > 0.98);
+        } catch (e) { resolve(false); }
+      };
+      img.onerror = function () { resolve(false); };
+      img.src = dataURL;
+    });
   }
 
   // ── Preview modal ──
+  // Get the active filter from grid filter buttons
+  function getActiveFilter() {
+    var active = document.querySelector('.grid-filter.active');
+    return active ? active.dataset.filter : 'all';
+  }
+
+  // Get page numbers matching the current filter
+  function getFilteredPages() {
+    var filter = getActiveFilter();
+    if (filter === 'all') return capturedPageNums.slice();
+    var grid = $('pageGrid');
+    var result = [];
+    grid.querySelectorAll('.page-tile.' + filter).forEach(function (tile) {
+      result.push(parseInt(tile.dataset.page, 10));
+    });
+    return result.sort(function (a, b) { return a - b; });
+  }
+
   async function openPreview(pageNum) {
     if (!selectedBookId) return;
 
@@ -345,6 +537,7 @@
     $('modalTitle').textContent = pageNum + '페이지';
     $('modalInfo').textContent = '로딩 중...';
     updateNavButtons();
+    updatePreviewButtons();
 
     try {
       var page = await extGetPage(selectedBookId, pageNum);
@@ -367,18 +560,35 @@
   }
 
   function updateNavButtons() {
-    var idx = capturedPageNums.indexOf(previewPageNum);
+    var filtered = getFilteredPages();
+    var idx = filtered.indexOf(previewPageNum);
     $('prevPage').disabled = (idx <= 0);
-    $('nextPage').disabled = (idx < 0 || idx >= capturedPageNums.length - 1);
+    $('nextPage').disabled = (idx < 0 || idx >= filtered.length - 1);
+  }
+
+  function updatePreviewButtons() {
+    var tile = $('pageGrid').querySelector('[data-page="' + previewPageNum + '"]');
+    var isSuspect = tile && tile.classList.contains('suspect');
+    var isFailed = tile && tile.classList.contains('failed');
+    var needsAction = isSuspect || isFailed || (tile && !tile.classList.contains('captured'));
+    $('markNormalBtn').disabled = !needsAction;
+    $('markNormalBtn').textContent = needsAction ? '정상 확인' : '정상 확인됨';
   }
 
   function navigatePreview(direction) {
-    var idx = capturedPageNums.indexOf(previewPageNum);
-    if (idx < 0) return;
-
-    var newIdx = idx + direction;
-    if (newIdx >= 0 && newIdx < capturedPageNums.length) {
-      openPreview(capturedPageNums[newIdx]);
+    var filtered = getFilteredPages();
+    var idx = filtered.indexOf(previewPageNum);
+    if (idx < 0) {
+      // Current page not in filter — find nearest
+      for (var i = 0; i < filtered.length; i++) {
+        if (filtered[i] > previewPageNum) { idx = direction > 0 ? i : i - 1; break; }
+      }
+      if (idx < 0) idx = filtered.length - 1;
+    } else {
+      idx += direction;
+    }
+    if (idx >= 0 && idx < filtered.length) {
+      openPreview(filtered[idx]);
     }
   }
 
@@ -387,21 +597,45 @@
     if (!selectedBookId || !pageNum) return;
 
     try {
+      // Find next page in current filter BEFORE deleting
+      var filtered = getFilteredPages();
+      var idx = filtered.indexOf(pageNum);
+      var nextInFilter = null;
+      if (idx >= 0 && idx + 1 < filtered.length) nextInFilter = filtered[idx + 1];
+      else if (idx > 0) nextInFilter = filtered[idx - 1];
+
+      // Delete (no confirm — fast workflow)
       await extDeletePage(selectedBookId, pageNum);
       capturedPageNums = capturedPageNums.filter(function (n) { return n !== pageNum; });
-      showToast(pageNum + '페이지 삭제됨');
-      renderDetail();
+      delete thumbCache[pageNum];
+      updateInspectionAfterDelete([pageNum]);
 
-      var sorted = capturedPageNums.slice().sort(function (a, b) { return a - b; });
-      if (sorted.length === 0) {
-        closePreview();
-      } else {
-        var nextPage = sorted.find(function (n) { return n > pageNum; }) || sorted[sorted.length - 1];
-        openPreview(nextPage);
+      // Update tile immediately without full re-render
+      var tile = $('pageGrid').querySelector('[data-page="' + pageNum + '"]');
+      if (tile) {
+        tile.className = 'page-tile missing';
+        tile.dataset.loaded = 'false';
+        var thumb = tile.querySelector('.tile-thumb');
+        if (thumb) thumb.remove();
+        tile.title = pageNum + '페이지 (누락)';
       }
 
-      await loadBooks();
-      renderBookList();
+      // Jump to next page in filter instantly
+      if (nextInFilter) {
+        openPreview(nextInFilter);
+      } else {
+        closePreview();
+      }
+
+      // Update counters in background
+      var totalPages = (selectedBook && selectedBook.totalPages) || 0;
+      if (totalPages > 0) {
+        var pct = Math.round(capturedPageNums.length / totalPages * 100);
+        $('detailFill').style.width = pct + '%';
+        $('detailProgress').textContent = pct + '%';
+        $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
+      }
+      loadBooks().then(renderBookList);
     } catch (e) {
       showError('페이지 삭제 실패', pageNum + '페이지를 삭제하는 중 오류가 발생했습니다.', formatErrorDetail(e));
     }
@@ -490,7 +724,7 @@
     });
   }
 
-  // Viewer connected: get book info → auto-select in session manager
+  // Viewer connected: get book info + TOC → auto-select in session manager
   function syncViewerBook(tabId) {
     chrome.tabs.sendMessage(tabId, { action: 'getPageInfo' }, function (r) {
       if (chrome.runtime.lastError || !r || !r.success || !r.data) return;
@@ -500,26 +734,38 @@
 
       var bookId = 'title:' + title;
 
-      // Reload books from DB (metadata may have just been cached)
-      loadBooks().then(function () {
-        // Find this book in the list
-        var found = null;
-        for (var i = 0; i < books.length; i++) {
-          if (books[i].title === title) { found = books[i]; break; }
-        }
+      // Also fetch TOC from the viewer immediately
+      chrome.tabs.sendMessage(tabId, { action: 'getTOC' }, function (tocR) {
+        void chrome.runtime.lastError;
+        var liveToc = (tocR && tocR.success && tocR.data) ? tocR.data : [];
 
-        if (found) {
-          selectBook(found.bookId);
-        } else {
-          // Not in DB yet - create placeholder and select
-          selectedBookId = bookId;
-          selectedBook = { bookId: bookId, title: title, totalPages: total || 0, toc: [], cachedCount: 0 };
-          capturedPageNums = [];
-          $('emptyState').hidden = true;
-          $('bookDetail').hidden = false;
-          renderBookList();
-          renderDetail();
-        }
+        loadBooks().then(function () {
+          var found = null;
+          for (var i = 0; i < books.length; i++) {
+            if (books[i].title === title) { found = books[i]; break; }
+          }
+
+          if (found) {
+            // Update TOC if viewer has a better one
+            if (liveToc.length > 0 && (!found.toc || found.toc.length === 0 || liveToc.length > found.toc.length)) {
+              found.toc = liveToc;
+              extStoreBookMeta(found.bookId, found.title, found.totalPages, liveToc).catch(function () {});
+            }
+            selectBook(found.bookId);
+          } else {
+            selectedBookId = bookId;
+            selectedBook = { bookId: bookId, title: title, totalPages: total || 0, toc: liveToc, cachedCount: 0 };
+            capturedPageNums = [];
+            // Save metadata with TOC
+            if (liveToc.length > 0) {
+              extStoreBookMeta(bookId, title, total || 0, liveToc).catch(function () {});
+            }
+            $('emptyState').hidden = true;
+            $('bookDetail').hidden = false;
+            renderBookList();
+            renderDetail();
+          }
+        });
       });
     });
   }
@@ -569,8 +815,10 @@
     var tile = grid.querySelector('[data-page="' + pageNum + '"]');
     if (tile) {
       tile.className = 'page-tile captured';
+      tile.dataset.loaded = 'false';
       tile.title = pageNum + '페이지';
-      tile.addEventListener('click', function () {
+      tile.addEventListener('click', function (e) {
+        if (e.target.classList.contains('tile-check')) return;
         openPreview(parseInt(this.dataset.page, 10));
       });
     }
@@ -596,6 +844,181 @@
         tile.title = failedPages[i] + '페이지 (캡처 실패)';
       }
     }
+  }
+
+  // ── Missing ranges ──
+  function renderMissingRanges() {
+    var totalPages = (selectedBook && selectedBook.totalPages) || 0;
+    var section = $('missingSection');
+    if (totalPages === 0) { section.hidden = true; return; }
+
+    var capturedSet = {};
+    capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
+
+    // Find contiguous missing ranges
+    var ranges = [];
+    var rangeStart = 0;
+    for (var p = 1; p <= totalPages; p++) {
+      if (!capturedSet[p]) {
+        if (rangeStart === 0) rangeStart = p;
+      } else {
+        if (rangeStart > 0) {
+          ranges.push({ start: rangeStart, end: p - 1 });
+          rangeStart = 0;
+        }
+      }
+    }
+    if (rangeStart > 0) ranges.push({ start: rangeStart, end: totalPages });
+
+    if (ranges.length === 0) { section.hidden = true; return; }
+
+    section.hidden = false;
+    var totalMissing = 0;
+    ranges.forEach(function (r) { totalMissing += r.end - r.start + 1; });
+    $('missingLabel').textContent = '누락 구간 (' + totalMissing + '페이지, ' + ranges.length + '구간)';
+
+    var html = '';
+    for (var i = 0; i < ranges.length; i++) {
+      var r = ranges[i];
+      var count = r.end - r.start + 1;
+      var label = r.start === r.end ? r.start + 'p' : r.start + '-' + r.end + 'p';
+      html += '<div class="missing-range">' +
+        '<span class="range-text">' + label + '</span>' +
+        '<span class="range-count">' + count + '개</span>' +
+        '<button class="range-rescan" data-start="' + r.start + '" data-end="' + r.end + '">재스캔</button>' +
+      '</div>';
+    }
+    $('missingRanges').innerHTML = html;
+
+    // Bind rescan buttons
+    $('missingRanges').querySelectorAll('.range-rescan').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var start = parseInt(this.dataset.start, 10);
+        var end = parseInt(this.dataset.end, 10);
+        rescanRange(start, end);
+      });
+    });
+  }
+
+  function rescanRange(startPage, endPage) {
+    if (!viewerTabId) {
+      showToast('뷰어가 연결되어야 재스캔 가능합니다');
+      return;
+    }
+    chrome.tabs.sendMessage(viewerTabId, {
+      action: 'startCapture',
+      options: {
+        startPage: startPage, endPage: endPage,
+        mode: 'normal', autoRetry: true, captureDelay: 500,
+        pageDelayMin: 800, pageDelayMax: 1500, resume: true
+      }
+    }, function (r) {
+      void chrome.runtime.lastError;
+      if (r && r.success) {
+        showToast(startPage + '-' + endPage + 'p 재스캔 시작');
+        // Switch to viewer
+        chrome.tabs.update(viewerTabId, { active: true });
+      } else {
+        showToast('재스캔 시작 실패');
+      }
+    });
+  }
+
+  // ── Batch delete ──
+  function updateBatchBtn() {
+    var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
+    var count = checked.length;
+    if (count === 0) {
+      $('batchConfirmBtn').hidden = true;
+      $('batchDeleteBtn').hidden = true;
+      return;
+    }
+
+    // Analyze what's selected
+    var hasCaptured = false, hasSuspect = false;
+    checked.forEach(function (cb) {
+      var tile = cb.parentElement;
+      if (tile.classList.contains('suspect') || tile.classList.contains('failed')) hasSuspect = true;
+      if (tile.classList.contains('captured')) hasCaptured = true;
+    });
+
+    // suspect/failed selected → show "정상 확인" + "삭제"
+    // captured selected → show "삭제" only
+    // missing/failed → nothing useful (can't delete what's not there)
+    $('batchConfirmBtn').hidden = !hasSuspect;
+    $('batchDeleteBtn').hidden = !(hasCaptured || hasSuspect);
+    $('batchConfirmBtn').textContent = count + '개 정상 확인';
+    $('batchDeleteBtn').textContent = count + '개 삭제';
+  }
+
+  async function batchDeletePages(pageNums) {
+    for (var i = 0; i < pageNums.length; i++) {
+      try { await extDeletePage(selectedBookId, pageNums[i]); } catch (e) {}
+      // Remove from thumb cache and inspection
+      delete thumbCache[pageNums[i]];
+    }
+    capturedPageNums = capturedPageNums.filter(function (n) { return pageNums.indexOf(n) === -1; });
+    // Update stored inspection count to match (avoid re-inspection)
+    updateInspectionAfterDelete(pageNums);
+    showToast(pageNums.length + '개 페이지 삭제됨');
+    renderDetail();
+    await loadBooks();
+    renderBookList();
+  }
+
+  function updateInspectionAfterDelete(deletedPages) {
+    var key = getInspectionKey();
+    chrome.storage.local.get(key, function (d) {
+      var stored = d[key];
+      if (!stored) return;
+      // Remove deleted pages from inspection data
+      var delSet = {};
+      deletedPages.forEach(function (p) { delSet[p] = true; });
+      stored.count = capturedPageNums.length;
+      stored.suspectPages = (stored.suspectPages || []).filter(function (p) { return !delSet[p]; });
+      if (stored.thumbs) {
+        deletedPages.forEach(function (p) { delete stored.thumbs[p]; });
+      }
+      var obj = {};
+      obj[key] = stored;
+      chrome.storage.local.set(obj);
+    });
+  }
+
+  // ── Manual page status override (persisted) ──
+  var confirmedPages = {}; // pageNum → true (persisted in chrome.storage)
+
+  function loadConfirmedPages() {
+    if (!selectedBookId) return;
+    var key = 'confirmed_' + selectedBookId;
+    chrome.storage.local.get(key, function (d) {
+      var arr = d[key] || [];
+      confirmedPages = {};
+      arr.forEach(function (p) { confirmedPages[p] = true; });
+    });
+  }
+
+  function saveConfirmedPages() {
+    if (!selectedBookId) return;
+    var key = 'confirmed_' + selectedBookId;
+    var obj = {};
+    obj[key] = Object.keys(confirmedPages).map(Number);
+    chrome.storage.local.set(obj);
+  }
+
+  function setPageStatus(pageNum, status) {
+    var grid = $('pageGrid');
+    var tile = grid.querySelector('[data-page="' + pageNum + '"]');
+    if (tile) {
+      tile.classList.remove('captured', 'suspect', 'failed');
+      tile.classList.add(status);
+      tile.title = pageNum + '페이지';
+    }
+    if (status === 'captured') {
+      confirmedPages[pageNum] = true;
+      saveConfirmedPages();
+    }
+    showToast(pageNum + 'p → 정상 확인');
   }
 
   // Periodic DB refresh for page data (catches any missed real-time updates)
@@ -700,6 +1123,7 @@
 
         case 'captureComplete':
           isScanning = false;
+          clearInspection(); // new scan → re-inspect
           refreshBookData().then(function () {
             // Highlight failed pages in red
             if (msg.data && msg.data.missingPages && msg.data.missingPages.length > 0) {
@@ -999,11 +1423,195 @@
     });
   }
 
+  // ── TOC Rescan ──
+  function tocRescan() {
+    if (viewerTabId) {
+      // Viewer already open — just fetch TOC
+      doTocFetch(viewerTabId);
+    } else if (selectedBook && selectedBook.title) {
+      // No viewer — open it first, then fetch
+      showToast('뷰어 여는 중...');
+      chrome.runtime.sendMessage({
+        target: 'background', action: 'startCaptureForBook',
+        bookTitle: selectedBook.title, resume: false
+      }, function () { void chrome.runtime.lastError; });
+      // Wait for viewer tab to appear, then fetch TOC
+      var checkCount = 0;
+      var waitForViewer = setInterval(function () {
+        checkCount++;
+        if (checkCount > 30) { clearInterval(waitForViewer); showToast('뷰어 열기 시간 초과'); return; }
+        chrome.tabs.query({ url: 'https://wviewer.kyobobook.co.kr/*' }, function (tabs) {
+          if (!tabs || tabs.length === 0) return;
+          clearInterval(waitForViewer);
+          viewerTabId = tabs[0].id;
+          // Wait for content script to be ready
+          setTimeout(function () { doTocFetch(viewerTabId); }, 5000);
+        });
+      }, 1000);
+    } else {
+      showToast('도서 정보가 없습니다');
+    }
+  }
+
+  function doTocFetch(tabId) {
+    showToast('목차 스캔 중...');
+    chrome.tabs.sendMessage(tabId, { action: 'getTOC' }, function (r) {
+      if (chrome.runtime.lastError || !r || !r.success) {
+        showToast('목차 재스캔 실패 — 뷰어가 아직 로딩 중일 수 있습니다');
+        return;
+      }
+      var newToc = r.data || [];
+      if (newToc.length === 0) {
+        showToast('뷰어에서 목차를 찾을 수 없습니다');
+        return;
+      }
+      if (selectedBook) {
+        selectedBook.toc = newToc;
+        extStoreBookMeta(selectedBookId, selectedBook.title, selectedBook.totalPages, newToc).then(function () {
+          renderTOC();
+          showToast('목차 재스캔 완료 (' + newToc.length + '항목)');
+        });
+      }
+    });
+  }
+
+  // ── TOC Visual Editor ──
+  var editingToc = [];
+
+  function openTocEditor() {
+    editingToc = JSON.parse(JSON.stringify((selectedBook && selectedBook.toc) || []));
+    renderTocEditor();
+    $('tocEditOverlay').hidden = false;
+    $('tocEditStatus').textContent = editingToc.length + '개 항목';
+  }
+
+  function closeTocEditor() {
+    $('tocEditOverlay').hidden = true;
+  }
+
+  function renderTocEditor() {
+    var list = $('tocEditList');
+    var html = '';
+
+    // Determine max allowed depth per item (can't go deeper than prev item + 1)
+    for (var i = 0; i < editingToc.length; i++) {
+      var item = editingToc[i];
+      var depth = item.depth || 1;
+      var isFirst = (i === 0);
+      var prevDepth = isFirst ? 0 : (editingToc[i - 1].depth || 1);
+      var maxDepth = Math.min(prevDepth + 1, 5);
+      var canOutdent = depth > 1;
+      var canIndent = depth < maxDepth;
+
+      // Build tree connector: show hierarchy visually
+      var treeHtml = '';
+      for (var d = 1; d < depth; d++) {
+        // Check if there's a sibling at this depth level below
+        var hasSiblingBelow = false;
+        for (var j = i + 1; j < editingToc.length; j++) {
+          var jd = editingToc[j].depth || 1;
+          if (jd <= d) { hasSiblingBelow = (jd === d); break; }
+          if (jd === d + 1) { hasSiblingBelow = true; break; }
+        }
+        if (d === depth - 1) {
+          // Last connector: └ or ├
+          var isLastAtDepth = true;
+          for (var k = i + 1; k < editingToc.length; k++) {
+            var kd = editingToc[k].depth || 1;
+            if (kd < depth) break;
+            if (kd === depth) { isLastAtDepth = false; break; }
+          }
+          treeHtml += '<span class="tree-char">' + (isLastAtDepth ? '└─' : '├─') + '</span>';
+        } else {
+          // Vertical line or empty
+          var hasLine = false;
+          for (var m = i + 1; m < editingToc.length; m++) {
+            var md = editingToc[m].depth || 1;
+            if (md <= d) { hasLine = (md === d); break; }
+            if (md > d) hasLine = true;
+          }
+          treeHtml += '<span class="tree-char">' + (hasLine ? '│&nbsp;' : '&nbsp;&nbsp;') + '</span>';
+        }
+      }
+
+      html += '<div class="toc-edit-row" data-idx="' + i + '">' +
+        '<div class="toc-edit-depth-btns">' +
+          '<button class="toc-edit-depth-btn' + (canOutdent ? '' : ' disabled') + '" data-action="outdent" data-idx="' + i + '" title="상위로" ' + (canOutdent ? '' : 'disabled') + '>&lt;</button>' +
+          '<button class="toc-edit-depth-btn' + (canIndent ? '' : ' disabled') + '" data-action="indent" data-idx="' + i + '" title="하위로" ' + (canIndent ? '' : 'disabled') + '>&gt;</button>' +
+        '</div>' +
+        '<div class="toc-edit-tree">' + treeHtml + '</div>' +
+        '<input class="toc-edit-title" data-idx="' + i + '" value="' + escAttr(item.title || '') + '" placeholder="제목">' +
+        '<input class="toc-edit-page" type="number" data-idx="' + i + '" value="' + (item.page || '') + '" placeholder="p">' +
+        '<button class="toc-edit-del" data-action="delete" data-idx="' + i + '" title="삭제">✕</button>' +
+      '</div>';
+    }
+    if (editingToc.length === 0) {
+      html = '<div style="padding:40px;text-align:center;color:#aeaeb2;font-size:13px">목차 항목이 없습니다. + 추가 버튼을 눌러주세요.</div>';
+    }
+    list.innerHTML = html;
+    $('tocEditStatus').textContent = editingToc.length + '개 항목';
+
+    // Bind events
+    list.querySelectorAll('[data-action]').forEach(function (btn) {
+      if (btn.disabled) return;
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var idx = parseInt(this.dataset.idx, 10);
+        var action = this.dataset.action;
+        if (action === 'indent') {
+          editingToc[idx].depth = (editingToc[idx].depth || 1) + 1;
+        } else if (action === 'outdent') {
+          editingToc[idx].depth = (editingToc[idx].depth || 1) - 1;
+        } else if (action === 'delete') {
+          editingToc.splice(idx, 1);
+        }
+        renderTocEditor();
+      });
+    });
+    list.querySelectorAll('.toc-edit-title').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        editingToc[parseInt(this.dataset.idx, 10)].title = this.value;
+      });
+    });
+    list.querySelectorAll('.toc-edit-page').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        editingToc[parseInt(this.dataset.idx, 10)].page = parseInt(this.value, 10) || 0;
+      });
+    });
+  }
+
+  function addTocItem() {
+    editingToc.push({ page: 0, title: '', depth: 1 });
+    renderTocEditor();
+    // Focus new item's title
+    var inputs = $('tocEditList').querySelectorAll('.toc-edit-title');
+    if (inputs.length > 0) inputs[inputs.length - 1].focus();
+  }
+
+  function saveTocEdit() {
+    // Filter out empty items
+    var cleaned = editingToc.filter(function (item) { return item.title && item.page > 0; });
+    if (selectedBook) {
+      selectedBook.toc = cleaned;
+      extStoreBookMeta(selectedBookId, selectedBook.title, selectedBook.totalPages, cleaned).then(function () {
+        renderTOC();
+        closeTocEditor();
+        showToast('목차 저장 완료 (' + cleaned.length + '항목)');
+      });
+    }
+  }
+
   function setupEventListeners() {
     $('deleteBookBtn').addEventListener('click', deleteBook);
     $('dlPdf').addEventListener('click', downloadPDF);
     $('dlZip').addEventListener('click', downloadZIP);
     $('exportBtn').addEventListener('click', exportSession);
+    $('tocRescanBtn').addEventListener('click', tocRescan);
+    $('tocEditBtn').addEventListener('click', openTocEditor);
+    $('tocEditClose').addEventListener('click', closeTocEditor);
+    $('tocEditBackdrop').addEventListener('click', closeTocEditor);
+    $('tocEditSave').addEventListener('click', saveTocEdit);
+    $('tocAddBtn').addEventListener('click', addTocItem);
     $('openReaderBtn').addEventListener('click', function () {
       if (!selectedBookId) return;
       chrome.runtime.sendMessage({
@@ -1014,6 +1622,92 @@
     // Collapsible sections
     setupCollapsible('tocToggle', 'tocIcon', 'tocList');
     setupCollapsible('gridToggle', 'gridIcon', 'pageGrid');
+
+    // Rescan all missing
+    $('rescanAllBtn').addEventListener('click', function () {
+      var totalPages = (selectedBook && selectedBook.totalPages) || 0;
+      if (totalPages === 0) return;
+      var capturedSet = {};
+      capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
+      // Find first missing and last missing
+      var first = 0, last = 0;
+      for (var p = 1; p <= totalPages; p++) {
+        if (!capturedSet[p]) { if (!first) first = p; last = p; }
+      }
+      if (first === 0) { showToast('누락 페이지 없음'); return; }
+      rescanRange(first, last);
+    });
+
+    // Grid filters
+    $('gridFilters').querySelectorAll('.grid-filter').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        $('gridFilters').querySelectorAll('.grid-filter').forEach(function (b) { b.classList.remove('active'); });
+        this.classList.add('active');
+        var filter = this.dataset.filter;
+        var grid = $('pageGrid');
+        var isSelect = grid.classList.contains('select-mode');
+        grid.className = 'page-grid' + (filter !== 'all' ? ' filter-' + filter : '') + (isSelect ? ' select-mode' : '');
+        updateBatchBtn();
+      });
+    });
+
+    // Select all / deselect (respects active filter)
+    $('selectAllBtn').addEventListener('click', function () {
+      $('pageGrid').querySelectorAll('.page-tile').forEach(function (tile) {
+        // Skip tiles hidden by CSS filter
+        if (tile.offsetWidth === 0) return;
+        var cb = tile.querySelector('.tile-check');
+        if (cb) { cb.checked = true; tile.classList.add('selected'); }
+      });
+      updateBatchBtn();
+    });
+    $('deselectAllBtn').addEventListener('click', function () {
+      $('pageGrid').querySelectorAll('.tile-check:checked').forEach(function (cb) {
+        cb.checked = false;
+        cb.parentElement.classList.remove('selected');
+      });
+      updateBatchBtn();
+    });
+
+    // Batch confirm normal
+    $('batchConfirmBtn').addEventListener('click', function () {
+      var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
+      var count = 0;
+      checked.forEach(function (cb) {
+        var tile = cb.parentElement;
+        var pn = parseInt(cb.dataset.page, 10);
+        if (tile.classList.contains('suspect') || tile.classList.contains('failed')) {
+          tile.classList.remove('suspect', 'failed');
+          tile.classList.add('captured');
+          tile.title = pn + '페이지';
+          confirmedPages[pn] = true;
+          count++;
+        }
+        cb.checked = false;
+        tile.classList.remove('selected');
+      });
+      saveConfirmedPages();
+      updateBatchBtn();
+      showToast(count + '개 페이지 정상 확인');
+    });
+
+    // Batch delete
+    $('batchDeleteBtn').addEventListener('click', function () {
+      var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
+      var pages = [];
+      checked.forEach(function (cb) { pages.push(parseInt(cb.dataset.page, 10)); });
+      if (pages.length === 0) return;
+      if (!confirm(pages.length + '개 페이지를 삭제하시겠습니까?')) return;
+      batchDeletePages(pages);
+    });
+
+    // Delegate checkbox clicks on grid
+    $('pageGrid').addEventListener('change', function (e) {
+      if (e.target.classList.contains('tile-check')) {
+        e.target.parentElement.classList.toggle('selected', e.target.checked);
+        updateBatchBtn();
+      }
+    });
 
     $('importBtn').addEventListener('click', function () {
       $('importFile').click();
@@ -1031,9 +1725,11 @@
     $('prevPage').addEventListener('click', function () { navigatePreview(-1); });
     $('nextPage').addEventListener('click', function () { navigatePreview(1); });
     $('deletePageBtn').addEventListener('click', function () {
-      if (previewPageNum > 0 && confirm(previewPageNum + '페이지를 삭제하시겠습니까?')) {
-        deletePage(previewPageNum);
-      }
+      if (previewPageNum > 0) deletePage(previewPageNum);
+    });
+    $('markNormalBtn').addEventListener('click', function () {
+      setPageStatus(previewPageNum, 'captured');
+      updatePreviewButtons();
     });
 
     // Error dialog
