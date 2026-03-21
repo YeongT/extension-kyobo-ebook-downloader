@@ -31,6 +31,7 @@
     configurable: true
   });
 
+
   // Live update: format/quality only, DPR is fixed at 4x
   function _handleLiveDPRUpdate(newDPR, newFormat, newQuality) {
     // DPR ignored — always 4x
@@ -243,7 +244,23 @@
     });
   }
 
-  // ── 3. Find content canvas ──
+  // ── 3. Canvas size normalization ──
+  // Reference canvas size from first capture (1-page view = full size)
+  // When 2-page view produces smaller canvas, upscale to match reference
+  var _refCanvasWidth = 0;
+  var _refCanvasHeight = 0;
+
+  function upscaleCanvas(srcCanvas, targetWidth) {
+    var ratio = srcCanvas.height / srcCanvas.width;
+    var targetHeight = Math.round(targetWidth * ratio);
+    var c = document.createElement('canvas');
+    c.width = targetWidth;
+    c.height = targetHeight;
+    c.getContext('2d').drawImage(srcCanvas, 0, 0, targetWidth, targetHeight);
+    return c;
+  }
+
+  // ── 3b. Find content canvas ──
   function findCanvas() {
     var c = document.querySelector('.canvasLayer canvas');
     if (c) return c;
@@ -253,6 +270,25 @@
       if (c) return c;
     }
     return document.querySelector('#content canvas, .mid_zone canvas');
+  }
+
+  // Find all visible rendered canvases (for 2-page spread capture)
+  function findAllCanvases() {
+    var result = [];
+    var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
+    for (var i = 0; i < pages.length; i++) {
+      var c = pages[i].querySelector('.canvasLayer canvas');
+      if (!c) c = pages[i].querySelector('canvas');
+      if (c && c.width > 0 && c.height > 0) {
+        // Extract page number from pdfPage id (e.g., pdfPage_372 → 372)
+        var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
+        var pageNum = idMatch ? parseInt(idMatch[1], 10) : 0;
+        result.push({ canvas: c, pageNum: pageNum });
+      }
+    }
+    // Sort by page number
+    result.sort(function (a, b) { return a.pageNum - b.pageNum; });
+    return result;
   }
 
   // ── 4. Page info ──
@@ -420,7 +456,13 @@
 
   // Direct page jump (primary navigation for capture)
   function goToPage(pageNum) {
-    // 1. moveToPage API (pdf.engine.js)
+    // 1. Slider bar manipulation (most reliable — always works)
+    var slider = findSlider();
+    if (slider) {
+      return setSliderToPage(slider, pageNum, getTotalPages());
+    }
+
+    // 2. moveToPage API (pdf.engine.js) — fallback
     try {
       if (window.chkPdf && window.chkPdf.Navi && typeof window.chkPdf.Navi.moveToPage === 'function') {
         window.chkPdf.Navi.moveToPage(pageNum);
@@ -428,7 +470,7 @@
       }
     } catch (e) {}
 
-    // 2. goPage fallback (older viewer)
+    // 3. goPage fallback (older viewer)
     try {
       if (window.chkPdf && window.chkPdf.Navi && typeof window.chkPdf.Navi.goPage === 'function') {
         window.chkPdf.Navi.goPage(pageNum);
@@ -436,7 +478,7 @@
       }
     } catch (e) {}
 
-    // 3. KYService API
+    // 4. KYService API
     try {
       if (window.KYService && window.KYService.Navi && typeof window.KYService.Navi.moveToPage === 'function') {
         window.KYService.Navi.moveToPage(pageNum);
@@ -444,7 +486,7 @@
       }
     } catch (e) {}
 
-    // 4. Slider bar manipulation (most reliable for large jumps)
+    // 5. UI input fallback
     var totalPages = getTotalPages();
     if (totalPages > 0) {
       var slider = findSlider();
@@ -514,13 +556,16 @@
     // Kyobo viewer: input[data-layout="rangeslider"] with class "bcrange"
     var primary = document.querySelector('input[data-layout="rangeslider"].bcrange');
     if (primary) return primary;
-    // Fallback: any visible range input in bottom control zone
+    // Fallback: any range input in bottom control zone (even if hidden)
     var bottom = document.querySelector('.bottomcontrol_zone input[type="range"]');
     if (bottom) return bottom;
-    // Generic fallback
+    // data-layout rangeslider without bcrange class
+    var dataLayout = document.querySelector('input[data-layout="rangeslider"]');
+    if (dataLayout) return dataLayout;
+    // Generic fallback — any range input
     var all = document.querySelectorAll('input[type="range"]');
     for (var i = 0; i < all.length; i++) {
-      if (all[i].offsetParent !== null) return all[i]; // first visible
+      if (all[i].max > 10) return all[i]; // likely page slider, not opacity/volume
     }
     return null;
   }
@@ -529,19 +574,9 @@
     return new Promise(function (resolve) {
       var min = parseFloat(slider.min) || 1;
       var max = parseFloat(slider.max) || totalPages;
-
-      // Kyobo slider uses min=1, max=totalPages directly
       var val = Math.max(min, Math.min(max, pageNum));
 
-      // Set value via native setter to bypass framework interception
-      try {
-        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(slider, val);
-      } catch (e) {
-        slider.value = val;
-      }
-
-      // Trigger rangeslider.js update via jQuery if available
+      // Method 1: jQuery rangeslider plugin — most reliable
       try {
         if (window.$ && window.$(slider).data('plugin_rangeslider')) {
           window.$(slider).val(val).change();
@@ -550,39 +585,25 @@
         }
       } catch (e) {}
 
-      // Dispatch events for non-jQuery handlers
+      // Method 2: jQuery without plugin data check
+      try {
+        if (window.$) {
+          window.$(slider).val(val).trigger('input').trigger('change');
+          resolve(true);
+          return;
+        }
+      } catch (e) {}
+
+      // Method 3: Native setter + events
+      try {
+        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(slider, val);
+      } catch (e) {
+        slider.value = val;
+      }
       slider.dispatchEvent(new Event('input', { bubbles: true }));
       slider.dispatchEvent(new Event('change', { bubbles: true }));
-
-      // Simulate physical drag on the rangeslider__handle for rangeslider.js
-      var rsContainer = slider.nextElementSibling || slider.parentElement.querySelector('.rangeslider');
-      if (rsContainer && rsContainer.classList.contains('rangeslider')) {
-        var rect = rsContainer.getBoundingClientRect();
-        var ratio = (val - min) / (max - min);
-        // Check direction (ltr vs rtl)
-        var dir = slider.dataset.direction || 'ltr';
-        var targetX = dir === 'rtl'
-          ? rect.right - rect.width * ratio
-          : rect.left + rect.width * ratio;
-        var targetY = rect.top + rect.height / 2;
-
-        rsContainer.dispatchEvent(new MouseEvent('mousedown', {
-          bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
-        }));
-        setTimeout(function () {
-          document.dispatchEvent(new MouseEvent('mousemove', {
-            bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
-          }));
-          setTimeout(function () {
-            document.dispatchEvent(new MouseEvent('mouseup', {
-              bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
-            }));
-            resolve(true);
-          }, 30);
-        }, 30);
-      } else {
-        resolve(true);
-      }
+      resolve(true);
     });
   }
 
@@ -900,6 +921,7 @@
 
   function clearState() {
     pdfDocument = null; pdfDims = null; capturedCount = 0; capturedPageMeta = [];
+    _refCanvasWidth = 0; _refCanvasHeight = 0;
   }
 
   // ── 7b. Canvas fingerprint (detect content change after page navigation) ──
@@ -947,22 +969,69 @@
         if (cpC.width === 0 || cpC.height === 0) { resp.data = { ok: false, error: 'canvas_empty' }; send(); break; }
         removeWatermarks();
         try {
+          // Normalize canvas to reference size if in 2-page spread mode
+          var cpCanvas = cpC;
+          if (_refCanvasWidth > 0 && cpC.width < _refCanvasWidth * 0.9) {
+            cpCanvas = upscaleCanvas(cpC, _refCanvasWidth);
+          } else if (_refCanvasWidth === 0) {
+            _refCanvasWidth = cpC.width;
+            _refCanvasHeight = cpC.height;
+          }
           var cpURL = (_captureFormat === 'image/jpeg')
-            ? cpC.toDataURL('image/jpeg', _captureQuality)
-            : cpC.toDataURL('image/png');
+            ? cpCanvas.toDataURL('image/jpeg', _captureQuality)
+            : cpCanvas.toDataURL('image/png');
           if (!cpURL || cpURL.length < 1000) { resp.data = { ok: false, error: 'canvas_blank' }; send(); break; }
           var cpPN = event.data.pageNum || 0;
           var cpBid = getBookId();
-          // AWAIT cache write before responding - ensures data is persisted
-          cachePageData(cpBid, cpPN, cpURL, cpC.width, cpC.height).then(function () {
-            resp.data = { ok: true, dataURL: cpURL, width: cpC.width, height: cpC.height, pageNum: cpPN, bookId: cpBid, cached: true };
+          cachePageData(cpBid, cpPN, cpURL, cpCanvas.width, cpCanvas.height).then(function () {
+            resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: true };
             send();
           }).catch(function (cacheErr) {
-            // Still return success (capture worked) but flag cache write failure
-            resp.data = { ok: true, dataURL: cpURL, width: cpC.width, height: cpC.height, pageNum: cpPN, bookId: cpBid, cached: false };
+            resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: false };
             send();
           });
         } catch (cpE) { resp.error = cpE.message; send(); }
+        break;
+      case 'captureBothPages':
+        removeWatermarks();
+        var bothCanvases = findAllCanvases();
+        if (bothCanvases.length === 0) { resp.data = []; send(); break; }
+        var bothResults = [];
+        var bothBid = getBookId();
+        var bothDone = 0;
+        var bothTotal = bothCanvases.length;
+        for (var bi = 0; bi < bothCanvases.length; bi++) {
+          (function (bc, idx) {
+            try {
+              // Normalize to reference size
+              var outCanvas = bc.canvas;
+              if (_refCanvasWidth > 0 && bc.canvas.width < _refCanvasWidth * 0.9) {
+                outCanvas = upscaleCanvas(bc.canvas, _refCanvasWidth);
+              } else if (_refCanvasWidth === 0) {
+                _refCanvasWidth = bc.canvas.width;
+                _refCanvasHeight = bc.canvas.height;
+              }
+              var url = (_captureFormat === 'image/jpeg')
+                ? outCanvas.toDataURL('image/jpeg', _captureQuality)
+                : outCanvas.toDataURL('image/png');
+              if (!url || url.length < 1000) {
+                bothResults[idx] = { ok: false, error: 'canvas_blank', pageNum: bc.pageNum };
+                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
+                return;
+              }
+              cachePageData(bothBid, bc.pageNum, url, outCanvas.width, outCanvas.height).then(function () {
+                bothResults[idx] = { ok: true, dataURL: url, width: outCanvas.width, height: outCanvas.height, pageNum: bc.pageNum, bookId: bothBid, cached: true };
+                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
+              }).catch(function () {
+                bothResults[idx] = { ok: true, dataURL: url, width: outCanvas.width, height: outCanvas.height, pageNum: bc.pageNum, bookId: bothBid, cached: false };
+                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
+              });
+            } catch (e) {
+              bothResults[idx] = { ok: false, error: e.message, pageNum: bc.pageNum };
+              if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
+            }
+          })(bothCanvases[bi], bi);
+        }
         break;
       case 'getCapturedCount': resp.data = capturedCount; send(); break;
       case 'clearState': clearState(); resp.data = true; send(); break;

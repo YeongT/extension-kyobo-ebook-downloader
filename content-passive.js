@@ -6,7 +6,6 @@
   C._passiveCachedSet = null;
 
   C.initPassiveCapture = async function () {
-    // Build cached page set from extension DB
     try {
       var pi = await C.callInject('getPageInfo');
       if (!pi || !pi.title) return;
@@ -44,24 +43,48 @@
         if (!curPage || curPage === C._passiveLastPage) return;
         C._passiveLastPage = curPage;
 
-        if (C._passiveCachedSet[curPage]) return;
+        // Check if any visible page needs capture
+        var hasUncached = !C._passiveCachedSet[curPage];
+        // Also check adjacent page (2-page spread: curPage and curPage+1)
+        var hasUncachedNext = !C._passiveCachedSet[curPage + 1];
+        if (!hasUncached && !hasUncachedNext) return;
 
-        // Uncached page detected — auto capture
         C._passiveCapturing = true;
-        await C.delay(300); // let canvas settle
+        await C.delay(400);
         await C.waitCanvasReady(3000);
         await C.delay(200);
 
-        var result = await C.callInject('capturePageOnly', { pageNum: curPage });
-        if (result && result.ok && result.dataURL) {
-          C._passiveCachedSet[curPage] = true;
-          C.forwardToBackground('cachePage', {
-            bookId: C.getBookId(), pageNum: result.pageNum,
-            dataURL: result.dataURL, width: result.width, height: result.height
-          });
-          // Notify sessions.js to update grid tile
-          C.notifyPopup('passiveCapture', { page: curPage, bookId: C.getBookId() });
-          C.showStackToast(curPage + 'p 자동 캡처됨', 2500);
+        // Try capturing all visible canvases (works in both 1-page and 2-page view)
+        var results = null;
+        try { results = await C.callInject('captureBothPages'); } catch (e) {}
+
+        if (results && results.length > 0) {
+          var capturedAny = false;
+          for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            if (!r || !r.ok || !r.pageNum) continue;
+            if (C._passiveCachedSet[r.pageNum]) continue;
+            C._passiveCachedSet[r.pageNum] = true;
+            C.forwardToBackground('cachePage', {
+              bookId: C.getBookId(), pageNum: r.pageNum,
+              dataURL: r.dataURL, width: r.width, height: r.height
+            });
+            C.notifyPopup('passiveCapture', { page: r.pageNum, bookId: C.getBookId() });
+            C.showStackToast(r.pageNum + 'p 자동 캡처됨', 2500);
+            capturedAny = true;
+          }
+        } else {
+          // Fallback: single page capture
+          var result = await C.callInject('capturePageOnly', { pageNum: curPage });
+          if (result && result.ok && result.dataURL) {
+            C._passiveCachedSet[curPage] = true;
+            C.forwardToBackground('cachePage', {
+              bookId: C.getBookId(), pageNum: result.pageNum,
+              dataURL: result.dataURL, width: result.width, height: result.height
+            });
+            C.notifyPopup('passiveCapture', { page: curPage, bookId: C.getBookId() });
+            C.showStackToast(curPage + 'p 자동 캡처됨', 2500);
+          }
         }
       } catch (e) {}
       C._passiveCapturing = false;

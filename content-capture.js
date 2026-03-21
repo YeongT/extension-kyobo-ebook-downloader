@@ -290,18 +290,43 @@
           continue;
         }
 
-        // Navigate to page and capture (reads actual viewer position each time)
+        // Navigate to page and capture
         var result = await C.navigateAndCapture(page);
 
-        if (result && result.ok) {
+        // Try 2-page spread capture: grab both visible canvases at once
+        var bothResults = null;
+        try { bothResults = await C.callInject('captureBothPages'); } catch (e) {}
+        if (bothResults && bothResults.length > 1) {
+          // Got multiple pages from spread view
+          var extraCaptured = false;
+          for (var bi = 0; bi < bothResults.length; bi++) {
+            var br = bothResults[bi];
+            if (!br || !br.ok || !br.pageNum) continue;
+            if (cached[br.pageNum]) continue;
+            if (br.pageNum < startPage || br.pageNum > endPage) continue;
+            cached[br.pageNum] = true;
+            captured++; totalCached++;
+            if (br.dataURL) {
+              C.forwardToBackground('cachePage', { bookId: br.bookId, pageNum: br.pageNum, dataURL: br.dataURL, width: br.width, height: br.height });
+            }
+            C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: br.pageNum, message: totalCached + '/' + total + ' 캡처 완료' });
+            if (br.pageNum !== page) extraCaptured = true;
+          }
+          // Skip the next page if we already captured it from the spread
+          if (extraCaptured && page + 1 <= endPage && cached[page + 1]) {
+            scanDone++;
+            page++; // skip next iteration
+          }
+          consErr = 0;
+          scanDone++;
+          C.updateO(totalCached, total, page, scanDone, scanTotal);
+        } else if (result && result.ok) {
           captured++; totalCached++; consErr = 0;
           scanDone++;
-          // Mark as cached so re-runs skip this page
           cached[page] = true;
           if (result.dataURL) {
             C.forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
           }
-          // Warn if MAIN world cache write failed (data still sent to background cache)
           if (result.cached === false) {
             C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
           }

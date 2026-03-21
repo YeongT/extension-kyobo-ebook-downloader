@@ -129,6 +129,7 @@
     S.capturedPageNums.sort(function (a, b) { return a - b; });
 
     var grid = S.$('pageGrid');
+    if (!grid) return;
     var tile = grid.querySelector('[data-page="' + pageNum + '"]');
     if (tile) {
       tile.className = 'page-tile captured';
@@ -191,7 +192,11 @@
 
   S.switchToViewer = function () {
     if (S.viewerTabId) {
-      chrome.tabs.update(S.viewerTabId, { active: true });
+      chrome.tabs.get(S.viewerTabId, function (tab) {
+        if (chrome.runtime.lastError || !tab) return;
+        chrome.tabs.update(S.viewerTabId, { active: true });
+        chrome.windows.update(tab.windowId, { focused: true });
+      });
     }
   };
 

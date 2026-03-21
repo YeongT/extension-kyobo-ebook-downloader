@@ -80,6 +80,17 @@
   };
 
   var toastTimer = null;
+  // Debounced refresh after passive captures (waits 3s of inactivity)
+  var _passiveRefreshTimer = null;
+  S._schedulePassiveRefresh = function () {
+    clearTimeout(_passiveRefreshTimer);
+    _passiveRefreshTimer = setTimeout(function () {
+      if (S.selectedBookId) {
+        S.refreshBookData();
+      }
+    }, 3000);
+  };
+
   S.showToast = function (msg) {
     var t = $('toast');
     t.textContent = msg;
@@ -634,9 +645,13 @@
           break;
 
         case 'passiveCapture':
-          if (msg.data && msg.data.page && msg.data.bookId === S.selectedBookId) {
-            S.markPageCaptured(msg.data.page);
+          if (msg.data && msg.data.page) {
+            if (msg.data.bookId === S.selectedBookId) {
+              S.markPageCaptured(msg.data.page);
+            }
             S.loadBooks().then(function () { S.renderBookList(); });
+            // Debounced full refresh to trigger thumbnail + inspection
+            S._schedulePassiveRefresh();
           }
           break;
 
