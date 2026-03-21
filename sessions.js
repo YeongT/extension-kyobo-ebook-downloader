@@ -285,6 +285,8 @@
     var hideDownload = cachedCount === 0;
     $('downloadToolbar').hidden = hideDownload;
     $('pdfGroup').hidden = hideDownload;
+    $('dlPdf').disabled = !isComplete;
+    $('openReaderBtn').disabled = !isComplete;
     $('gridSection').hidden = totalPages === 0;
 
     // TOC
@@ -326,12 +328,14 @@
     fill.className = 'progress-fill' + (isComplete ? ' complete' : suspectCount > 0 ? ' has-suspect' : '');
     $('detailProgress').textContent = pct + '%';
 
-    // Update completion badge
+    // Update completion badge + button states
     if (isComplete) {
       if ($('completeBadge')) $('completeBadge').hidden = false;
     } else {
       if ($('completeBadge')) $('completeBadge').hidden = true;
     }
+    $('dlPdf').disabled = !isComplete;
+    $('openReaderBtn').disabled = !isComplete;
   }
 
   function updateTocMissingRow() {
@@ -468,12 +472,13 @@
     });
   }
 
-  function saveInspection(suspectPages, thumbs) {
+  function saveInspection(suspectPages, thumbs, pageSet) {
     var obj = {};
     obj[getInspectionKey()] = {
       count: capturedPageNums.length,
+      pageSet: pageSet || null, // array of inspected page numbers
       suspectPages: suspectPages,
-      thumbs: thumbs, // { pageNum: thumbDataURL }
+      thumbs: thumbs,
       timestamp: Date.now()
     };
     chrome.storage.local.set(obj);
@@ -501,23 +506,77 @@
       return;
     }
 
-    // Changes detected — run full inspection
-    gridLoadAbort = false;
-    showProgress('페이지 검사 중...', 0);
+    // Find which pages are new (not in previous inspection)
+    var prevSet = {};
+    if (stored && stored.pageSet) {
+      stored.pageSet.forEach(function (p) { prevSet[p] = true; });
+    }
+    var newPages = [];
+    for (var ni = 0; ni < captured.length; ni++) {
+      if (!prevSet[captured[ni]]) newPages.push(captured[ni]);
+    }
+
+    // Carry over previous results for unchanged pages
     var suspectPages = [];
     var thumbs = {};
+    if (stored) {
+      if (stored.thumbs) {
+        Object.keys(stored.thumbs).forEach(function (k) {
+          var pk = parseInt(k, 10);
+          if (captured.indexOf(pk) !== -1) thumbs[pk] = stored.thumbs[k];
+        });
+      }
+      if (stored.suspectPages) {
+        stored.suspectPages.forEach(function (p) {
+          if (captured.indexOf(p) !== -1) suspectPages.push(p);
+        });
+      }
+    }
 
-    for (var i = 0; i < captured.length; i++) {
+    // Apply carried-over thumbnails and suspect status immediately
+    applyStoredInspection({ thumbs: thumbs, suspectPages: suspectPages });
+
+    // Only inspect new pages
+    var toInspect = newPages.length > 0 ? newPages : captured;
+    // If we have prior data, only check new ones
+    if (stored && newPages.length === 0) {
+      // Nothing new to inspect
+      inspectionData = { count: captured.length, pageSet: captured.slice(), suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
+      saveInspection(suspectPages, thumbs, captured);
+      updateFilterCounts();
+      refreshDetailHeader();
+      renderMissingRanges();
+      return;
+    }
+
+    gridLoadAbort = false;
+    if (toInspect.length > 20) showProgress('페이지 검사 중...', 0);
+    var newSuspect = 0;
+
+    // First pass: collect page dimensions to detect outliers
+    var pageDims = {}; // pn → { w, h }
+    var dimCounts = {}; // "WxH" → count
+
+    for (var i = 0; i < toInspect.length; i++) {
       if (gridLoadAbort) break;
-      var pn = captured[i];
+      var pn = toInspect[i];
       var tile = $('pageGrid').querySelector('[data-page="' + pn + '"]');
       if (!tile) continue;
 
-      updateProgress(Math.round((i / captured.length) * 100), (i + 1) + '/' + captured.length + ' 검사 중...');
+      if (toInspect.length > 20) {
+        updateProgress(Math.round((i / toInspect.length) * 100), (i + 1) + '/' + toInspect.length + ' 검사 중...');
+      }
 
       try {
         var pg = await extGetPage(selectedBookId, pn);
         if (!pg || !pg.dataURL) continue;
+
+        // Track dimensions
+        if (pg.width && pg.height) {
+          pageDims[pn] = { w: pg.width, h: pg.height };
+          var dimKey = pg.width + 'x' + pg.height;
+          dimCounts[dimKey] = (dimCounts[dimKey] || 0) + 1;
+        }
 
         var thumbURL = await createThumbnail(pg.dataURL, 160);
         thumbCache[pn] = thumbURL;
@@ -535,22 +594,60 @@
             tile.classList.remove('captured');
             tile.classList.add('suspect');
             tile.title = pn + '페이지 (빈 페이지 의심)';
-            suspectPages.push(pn);
+            if (suspectPages.indexOf(pn) === -1) suspectPages.push(pn);
+            newSuspect++;
           }
         }
       } catch (e) {}
     }
 
+    // Collect dims from all pages (lightweight, no dataURL)
+    try {
+      var allPagesInfo = await extGetPagesInfo(selectedBookId);
+      allPagesInfo.forEach(function (pi) {
+        if (!pageDims[pi.pageNum] && pi.width && pi.height) {
+          pageDims[pi.pageNum] = { w: pi.width, h: pi.height };
+          var pk = pi.width + 'x' + pi.height;
+          dimCounts[pk] = (dimCounts[pk] || 0) + 1;
+        }
+      });
+    } catch (e) {}
+
+    // Detect dimension outliers — find majority size, flag others as suspect
+    var majorityDim = null;
+    var majorityCount = 0;
+    Object.keys(dimCounts).forEach(function (k) {
+      if (dimCounts[k] > majorityCount) { majorityCount = dimCounts[k]; majorityDim = k; }
+    });
+
+    var dimSuspectCount = 0;
+    if (majorityDim && Object.keys(dimCounts).length > 1) {
+      Object.keys(pageDims).forEach(function (pnStr) {
+        var ppn = parseInt(pnStr, 10);
+        var dk = pageDims[ppn].w + 'x' + pageDims[ppn].h;
+        if (dk !== majorityDim && !confirmedPages[ppn]) {
+          var dtile = $('pageGrid').querySelector('[data-page="' + ppn + '"]');
+          if (dtile && !dtile.classList.contains('suspect')) {
+            dtile.classList.remove('captured');
+            dtile.classList.add('suspect');
+            dtile.title = ppn + '페이지 (크기 불일치: ' + pageDims[ppn].w + 'x' + pageDims[ppn].h + ')';
+            if (suspectPages.indexOf(ppn) === -1) { suspectPages.push(ppn); dimSuspectCount++; }
+          }
+        }
+      });
+    }
+
     hideProgress();
     if (!gridLoadAbort) {
-      saveInspection(suspectPages, thumbs);
-      inspectionData = { count: capturedPageNums.length, suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
+      saveInspection(suspectPages, thumbs, captured);
+      inspectionData = { count: captured.length, pageSet: captured.slice(), suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
       updateFilterCounts();
       refreshDetailHeader();
       renderMissingRanges();
-      if (suspectPages.length > 0) {
-        showToast(suspectPages.length + '개 빈 페이지 의심 감지됨');
-      }
+      var msgs = [];
+      if (newSuspect > 0) msgs.push(newSuspect + '개 빈 페이지');
+      if (dimSuspectCount > 0) msgs.push(dimSuspectCount + '개 크기 불일치');
+      if (msgs.length > 0) showToast(msgs.join(', ') + ' 의심 감지됨');
     }
   }
 

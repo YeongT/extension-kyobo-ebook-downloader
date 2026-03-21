@@ -344,8 +344,16 @@
         'box-shadow:0 4px 16px rgba(0,0,0,.3);backdrop-filter:blur(8px);' +
         'opacity:0;transform:translateY(-8px);transition:all .2s;pointer-events:none;z-index:999999}' +
       '#toast.show{opacity:1;transform:translateY(0)}' +
+      /* stacking toasts */
+      '#toastStack{position:fixed;bottom:70px;right:20px;display:flex;flex-direction:column-reverse;gap:6px;z-index:999998;pointer-events:none}' +
+      '.stack-toast{padding:7px 14px;border-radius:8px;background:rgba(20,20,36,.88);color:#fff;' +
+        'font-size:11px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.25);backdrop-filter:blur(6px);' +
+        'opacity:0;transform:translateY(8px);transition:all .25s;white-space:nowrap}' +
+      '.stack-toast.show{opacity:1;transform:translateY(0)}' +
+      '.stack-toast.fade{opacity:0;transform:translateY(-4px)}' +
       '</style>' +
       '<div id="toast"></div>' +
+      '<div id="toastStack"></div>' +
       '<div id="rc">' +
         '<div id="pill">' +
           '<span class="dot d-idle" id="oDot"></span>' +
@@ -635,6 +643,24 @@
     t.textContent = msg;
     t.classList.add('show');
     setTimeout(function () { t.classList.remove('show'); }, duration || 3000);
+  }
+
+  function showStackToast(msg, duration) {
+    if (!overlayRoot) return;
+    var stack = overlayRoot.getElementById('toastStack');
+    if (!stack) return;
+    var el = document.createElement('div');
+    el.className = 'stack-toast';
+    el.textContent = msg;
+    stack.appendChild(el);
+    // Max 6 visible
+    while (stack.children.length > 6) stack.removeChild(stack.firstChild);
+    requestAnimationFrame(function () { el.classList.add('show'); });
+    setTimeout(function () {
+      el.classList.remove('show');
+      el.classList.add('fade');
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+    }, duration || 2000);
   }
 
   function updateOModeHighlight() {
@@ -1375,7 +1401,7 @@
             bookId: getBookId(), pageNum: result.pageNum,
             dataURL: result.dataURL, width: result.width, height: result.height
           });
-          showToast(curPage + 'p 자동 캡처됨', 1500);
+          showStackToast(curPage + 'p 자동 캡처됨', 2500);
         }
       } catch (e) {}
       _passiveCapturing = false;
