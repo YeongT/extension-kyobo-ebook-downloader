@@ -127,6 +127,17 @@
       $('totalPages').textContent = pages.length;
       $('currentPage').max = pages.length;
       populateChapterDropdown();
+
+      // Restore last read position
+      var savedIdx = 0;
+      try {
+        var saved = localStorage.getItem('reader_lastPage_' + bookId);
+        if (saved) {
+          var si = parseInt(saved, 10);
+          if (si >= 0 && si < pages.length) savedIdx = si;
+        }
+      } catch (e) {}
+      currentPageIdx = savedIdx;
       showView();
     } catch (e) {
       showStatus('로드 실패: ' + e.message);
@@ -162,6 +173,7 @@
   }
 
   function setViewMode(mode) {
+    if (pages.length === 0) return; // no book loaded yet
     viewMode = mode;
     $('viewSingle').classList.toggle('active', mode === 'single');
     $('viewSpread').classList.toggle('active', mode === 'spread');
@@ -616,7 +628,13 @@
     if (idx >= 0 && idx < pages.length) {
       currentPageIdx = idx;
       syncSlider();
-      showView();
+      if (viewMode === 'scroll') {
+        var slot = $('scrollContainer').querySelector('[data-idx="' + idx + '"]');
+        if (slot) slot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        updateTOCHighlight(pages[idx].pageNum);
+      } else {
+        showView();
+      }
     } else {
       this.value = currentPageIdx + 1;
     }
@@ -629,7 +647,14 @@
     if (idx >= 0 && idx < pages.length) {
       currentPageIdx = idx;
       $('currentPage').value = idx + 1;
-      showView();
+      if (viewMode === 'scroll') {
+        // Scroll to the page instead of reloading everything
+        var slot = $('scrollContainer').querySelector('[data-idx="' + idx + '"]');
+        if (slot) slot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        updateTOCHighlight(pages[idx].pageNum);
+      } else {
+        showView();
+      }
     }
   });
 
@@ -827,11 +852,35 @@
     if (fitMode !== 'manual') applyFit();
   });
 
+  // Ctrl+wheel: zoom in/out. Plain wheel while zoomed: reset to fit-width
+  var _wheelResetTimer = null;
+  document.addEventListener('wheel', function (e) {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      var delta = e.deltaY > 0 ? -25 : 25;
+      setZoom(getEffectiveZoom() + delta);
+    } else if (fitMode === 'manual') {
+      // User scrolling while manually zoomed — debounce reset to fit-width
+      clearTimeout(_wheelResetTimer);
+      _wheelResetTimer = setTimeout(function () {
+        fitMode = 'width';
+        $('fitWidth').classList.add('active');
+        $('fitPage').classList.remove('active');
+        $('zoomText').textContent = '너비';
+        applyFit();
+      }, 800);
+    }
+  }, { passive: false });
+
   // Wrap original showView to sync slider
   var _origShowView = showView;
   showView = function () {
     _origShowView();
     syncSlider();
+    // Save reading position
+    if (bookId && pages.length > 0) {
+      try { localStorage.setItem('reader_lastPage_' + bookId, String(currentPageIdx)); } catch (e) {}
+    }
   };
 
   // Init — default to page fit (세로 맞춤)

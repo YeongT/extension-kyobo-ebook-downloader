@@ -444,7 +444,21 @@
       }
     } catch (e) {}
 
-    // 4. UI input fallback (show header → type page → enter)
+    // 4. Slider bar manipulation (most reliable for large jumps)
+    var totalPages = getViewerPageNum() ? getTotalPages() : 0;
+    if (totalPages > 0) {
+      var slider = document.querySelector('input[type="range"].range_bar, input[type="range"][data-page], .range_bar input[type="range"]');
+      if (slider) {
+        var pct = ((pageNum - 1) / (totalPages - 1)) * 100;
+        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(slider, pct);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+        slider.dispatchEvent(new Event('change', { bubbles: true }));
+        return Promise.resolve(true);
+      }
+    }
+
+    // 5. UI input fallback (show header → type page → enter)
     return new Promise(function (resolve) {
       var header = document.querySelector('.header_zone, [data-layout="header_zone"]');
       if (header) header.classList.remove('hide');
@@ -454,7 +468,6 @@
         var r = viewer.getBoundingClientRect();
         var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
         viewer.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
-        // Delay > 20ms between down/up to avoid bot detector
         setTimeout(function () {
           viewer.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }));
         }, 40 + Math.random() * 60);
@@ -473,7 +486,6 @@
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-          // Delay > 20ms between keydown and keyup to avoid bot detector
           setTimeout(function () {
             input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
             resolve(true);
@@ -481,6 +493,15 @@
         }, 500);
       }, 600);
     });
+  }
+
+  function getTotalPages() {
+    var el = document.querySelector('[data-page="pageInfo"], .range_current');
+    if (el) {
+      var parts = el.textContent.trim().split('/');
+      if (parts.length === 2) return parseInt(parts[1], 10) || 0;
+    }
+    return 0;
   }
 
   // ── 5b. ZIP building from cache ──
