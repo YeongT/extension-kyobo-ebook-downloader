@@ -9,17 +9,12 @@
   // ── 0. High-resolution capture: Override devicePixelRatio ──
   // The viewer (PDF.js-based) reads window.devicePixelRatio to size its canvas.
   // canvas.width = CSS너비 × DPR → higher DPR = more pixels = sharper text/vectors.
-  // Defaults: 3× DPR + PNG (lossless). Settings synced via localStorage by content.js.
+  // Fixed at 4x for maximum resolution. Format/quality still configurable.
   var _nativeDPR = window.devicePixelRatio || 1;
-  var _captureDPR = 3;
+  var _captureDPR = 4;
   var _captureFormat = 'image/png';
   var _captureQuality = 0.92;
   try {
-    var storedDPR = localStorage.getItem('kyobo_ext_dpr');
-    if (storedDPR !== null && storedDPR !== '') {
-      var parsedDPR = parseFloat(storedDPR);
-      if (parsedDPR >= 1 && parsedDPR <= 6) _captureDPR = parsedDPR;
-    }
     var storedFmt = localStorage.getItem('kyobo_ext_format');
     if (storedFmt === 'jpeg') {
       _captureFormat = 'image/jpeg';
@@ -36,14 +31,11 @@
     configurable: true
   });
 
-  // Live update: content.js sends this when user changes settings in popup
-  // → updates DPR + triggers viewer re-render immediately (no reload needed)
+  // Live update: format/quality only, DPR is fixed at 4x
   function _handleLiveDPRUpdate(newDPR, newFormat, newQuality) {
-    if (newDPR >= 1 && newDPR <= 6) _captureDPR = newDPR;
+    // DPR ignored — always 4x
     if (newFormat) _captureFormat = newFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
     if (newQuality > 0 && newQuality <= 1) _captureQuality = newQuality;
-    // Trigger viewer re-render: PDF.js listens to resize and re-reads DPR
-    window.dispatchEvent(new Event('resize'));
   }
 
   var ALLOWED_ORIGIN = location.origin;

@@ -345,7 +345,7 @@
         'opacity:0;transform:translateY(-8px);transition:all .2s;pointer-events:none;z-index:999999}' +
       '#toast.show{opacity:1;transform:translateY(0)}' +
       /* stacking toasts */
-      '#toastStack{position:fixed;bottom:70px;right:20px;display:flex;flex-direction:column-reverse;gap:6px;z-index:999998;pointer-events:none}' +
+      '#toastStack{position:fixed;top:60px;right:20px;display:flex;flex-direction:column;gap:6px;z-index:999998;pointer-events:none}' +
       '.stack-toast{padding:7px 14px;border-radius:8px;background:rgba(20,20,36,.88);color:#fff;' +
         'font-size:11px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.25);backdrop-filter:blur(6px);' +
         'opacity:0;transform:translateY(8px);transition:all .25s;white-space:nowrap}' +
@@ -1315,11 +1315,10 @@
     }
   }
 
-  // ── Sync high-res capture settings to localStorage (for inject.js on next load) ──
+  // ── Sync capture settings to localStorage (for inject.js on next load) ──
   function syncCaptureSettings() {
-    chrome.storage.local.get({ captureDPR: 3, captureFormat: 'png', captureQuality: 92 }, function (d) {
+    chrome.storage.local.get({ captureFormat: 'png', captureQuality: 92 }, function (d) {
       try {
-        localStorage.setItem('kyobo_ext_dpr', String(d.captureDPR || 3));
         localStorage.setItem('kyobo_ext_format', d.captureFormat || 'png');
         localStorage.setItem('kyobo_ext_quality', String((d.captureQuality || 92) / 100));
       } catch (e) {}
@@ -1327,16 +1326,14 @@
   }
   // Re-sync when settings change + live-update the running viewer
   chrome.storage.onChanged.addListener(function (changes) {
-    if (changes.captureDPR || changes.captureFormat || changes.captureQuality) {
+    if (changes.captureFormat || changes.captureQuality) {
       syncCaptureSettings();
-      // Send live update to inject.js (MAIN world) → immediate re-render
-      chrome.storage.local.get({ captureDPR: 3, captureFormat: 'png', captureQuality: 92 }, function (d) {
+      chrome.storage.local.get({ captureFormat: 'png', captureQuality: 92 }, function (d) {
         callInject('updateCaptureSettings', {
-          dpr: d.captureDPR || 3,
           format: d.captureFormat || 'png',
           quality: (d.captureQuality || 92) / 100
         }).then(function () {
-          showToast('캡처 설정 적용됨 (DPR ' + (d.captureDPR || 3) + 'x)', 3000);
+          showToast('캡처 설정 적용됨', 3000);
         }).catch(function () {});
       });
     }

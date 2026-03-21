@@ -314,7 +314,7 @@
       autoRetry: true, autoRetryBlank: false,
       pageDelayMin: 800, pageDelayMax: 1500,
       blankThreshold: 245, blankRatio: 98,
-      captureDPR: 3, captureFormat: 'png', captureQuality: 92
+      captureFormat: 'png', captureQuality: 92
     }, function (d) {
       $('autoRetry').checked = d.autoRetry !== false;
       $('autoRetryBlank').checked = !!d.autoRetryBlank;
@@ -322,7 +322,6 @@
       $('sPageDelayMax').value = d.pageDelayMax;
       $('sBlankThreshold').value = d.blankThreshold;
       $('sBlankRatio').value = d.blankRatio;
-      $('sCaptureDPR').value = d.captureDPR;
       $('sCaptureFormat').value = d.captureFormat;
       $('sCaptureQuality').value = d.captureQuality;
       toggleQualityRow();
@@ -337,7 +336,6 @@
       pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500,
       blankThreshold: Math.min(255, Math.max(200, parseInt($('sBlankThreshold').value, 10) || 245)),
       blankRatio: Math.min(100, Math.max(50, parseInt($('sBlankRatio').value, 10) || 98)),
-      captureDPR: parseInt($('sCaptureDPR').value, 10) || 3,
       captureFormat: $('sCaptureFormat').value || 'png',
       captureQuality: Math.min(100, Math.max(50, parseInt($('sCaptureQuality').value, 10) || 92))
     });
@@ -356,10 +354,8 @@
     var el = $(id);
     if (el) el.addEventListener('change', saveSettings);
   });
-  ['sCaptureDPR', 'sCaptureFormat'].forEach(function (id) {
-    var el = $(id);
-    if (el) el.addEventListener('change', function () { toggleQualityRow(); saveSettings(); });
-  });
+  var fmtEl = $('sCaptureFormat');
+  if (fmtEl) fmtEl.addEventListener('change', function () { toggleQualityRow(); saveSettings(); });
 
   // ── Helpers ──
   function sendToTab(tabId, msg) {

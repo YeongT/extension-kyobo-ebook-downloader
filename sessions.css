@@ -371,11 +371,12 @@ body {
   letter-spacing: 0.3px;
 }
 .panel-action-btn {
-  padding: 3px 10px; border: 1px solid #fecaca; border-radius: 6px;
-  background: #fef2f2; color: #ef4444; font-size: 10px; font-weight: 600;
+  padding: 3px 8px; border: none; border-radius: 5px;
+  background: #f3f4f6; color: #6b7280; font-size: 10px; font-weight: 600;
   cursor: pointer; transition: all .12s; white-space: nowrap;
+  line-height: 1.3;
 }
-.panel-action-btn:hover { background: #fee2e2; }
+.panel-action-btn:hover { background: #e5e7eb; color: #374151; }
 .panel-action-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 .grid-header {
@@ -495,6 +496,24 @@ body {
 }
 .missing-range.suspect-range {
   background: #fdf2f8; border-color: #fbcfe8;
+  position: relative; cursor: default;
+}
+.missing-range.suspect-range[data-reason]:hover::after {
+  content: attr(data-reason);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(30,30,50,.92);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15);
 }
 .range-text { font-size: 12px; font-weight: 600; color: #dc2626; }
 .suspect-range .range-text { color: #e94560; }

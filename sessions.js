@@ -707,6 +707,22 @@
   }
   loadBlankSettings();
 
+  // Auto re-inspect when blank detection settings change
+  chrome.storage.onChanged.addListener(function (changes) {
+    if (changes.blankThreshold || changes.blankRatio) {
+      loadBlankSettings();
+      if (selectedBookId) {
+        forceFullInspection();
+      }
+    }
+  });
+
+  function forceFullInspection() {
+    clearInspection();
+    renderDetail();
+    showToast('검사 기준 변경됨 - 전체 재검사 중...');
+  }
+
   function checkBlankFromData(dataURL) {
     return new Promise(function (resolve) {
       var img = new Image();
@@ -1133,7 +1149,7 @@
       html += '</div></div>';
     }
 
-    // Suspect ranges
+    // Suspect ranges — collect reasons from tile titles
     if (hasSuspect) {
       html += '<div class="range-group">';
       html += '<div class="range-section-label suspect-label">의심 ' + suspectPages.length + '페이지 · ' + suspectRanges.length + '구간</div>';
@@ -1142,7 +1158,17 @@
         var sr = suspectRanges[j];
         var scount = sr.end - sr.start + 1;
         var slabel = sr.start === sr.end ? sr.start + 'p' : sr.start + '-' + sr.end + 'p';
-        html += '<div class="missing-range suspect-range">' +
+        // Collect reasons from grid tiles
+        var reasons = [];
+        for (var rp = sr.start; rp <= sr.end; rp++) {
+          var rtile = $('pageGrid') ? $('pageGrid').querySelector('[data-page="' + rp + '"]') : null;
+          if (rtile && rtile.title) {
+            var rm = rtile.title.match(/\((.+)\)/);
+            if (rm && reasons.indexOf(rm[1]) === -1) reasons.push(rm[1]);
+          }
+        }
+        var tooltip = reasons.length > 0 ? escAttr(reasons.join(', ')) : '';
+        html += '<div class="missing-range suspect-range" ' + (tooltip ? 'data-reason="' + tooltip + '"' : '') + '>' +
           '<span class="range-text">' + slabel + '</span>' +
           '<span class="range-count">' + scount + '개</span>' +
           '<button class="range-rescan" data-start="' + sr.start + '" data-end="' + sr.end + '">재스캔</button>' +
@@ -1489,13 +1515,13 @@
         if (!page || !page.dataURL) continue;
 
         var imgDims = await getImageDimensions(page.dataURL);
+        var curPageOpts = calcPageDimensions(imgDims.width, imgDims.height, target);
 
         if (i > 0) {
-          var opts = calcPageDimensions(imgDims.width, imgDims.height, target);
-          pdf.addPage([opts.pageW, opts.pageH], opts.orientation);
+          pdf.addPage([curPageOpts.pageW, curPageOpts.pageH], curPageOpts.orientation);
         }
 
-        var layout = calcImageLayout(imgDims.width, imgDims.height, pageOpts.pageW, pageOpts.pageH, target);
+        var layout = calcImageLayout(imgDims.width, imgDims.height, curPageOpts.pageW, curPageOpts.pageH, target);
         var jpegURL = await toJpegDataURL(page.dataURL, 1.0);
         pdf.addImage(jpegURL, 'JPEG', layout.x, layout.y, layout.w, layout.h);
 
@@ -1886,6 +1912,9 @@
     $('deleteBookBtn').addEventListener('click', deleteBook);
     $('dlPdf').addEventListener('click', downloadPDF);
     $('exportBtn').addEventListener('click', exportSession);
+    $('reinspectBtn').addEventListener('click', function () {
+      forceFullInspection();
+    });
     $('tocRescanBtn').addEventListener('click', tocRescan);
     $('tocEditBtn').addEventListener('click', openTocEditor);
     $('tocEditClose').addEventListener('click', closeTocEditor);
@@ -2004,6 +2033,26 @@
     $('modalBackdrop').addEventListener('click', closePreview);
     $('prevPage').addEventListener('click', function () { navigatePreview(-1); });
     $('nextPage').addEventListener('click', function () { navigatePreview(1); });
+    $('copyPageBtn').addEventListener('click', function () {
+      var img = $('previewImg');
+      if (!img || !img.src) return;
+      fetch(img.src).then(function (r) { return r.blob(); }).then(function (blob) {
+        return navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      }).then(function () {
+        showToast('클립보드에 복사됨');
+      }).catch(function () {
+        showToast('복사 실패');
+      });
+    });
+    $('dlPageBtn').addEventListener('click', function () {
+      var img = $('previewImg');
+      if (!img || !img.src) return;
+      var a = document.createElement('a');
+      a.href = img.src;
+      var title = (selectedBook && selectedBook.title) || 'page';
+      a.download = title.replace(/[^a-zA-Z0-9가-힣]/g, '_') + '_p' + previewPageNum + '.png';
+      a.click();
+    });
     $('deletePageBtn').addEventListener('click', function () {
       if (previewPageNum > 0) deletePage(previewPageNum);
     });
