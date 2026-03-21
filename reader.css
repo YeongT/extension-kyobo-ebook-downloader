@@ -114,10 +114,10 @@ body {
 .toc-item.active .toc-item-title { color: #e94560; }
 .toc-item-title {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: #1d1d1f;
+  color: #1d1d1f; font-weight: 650;
 }
-.toc-item.depth-2 .toc-item-title { padding-left: 16px; color: #86868b; }
-.toc-item.depth-3 .toc-item-title { padding-left: 32px; color: #aeaeb2; font-size: 11px; }
+.toc-item.depth-2 .toc-item-title { padding-left: 16px; font-weight: 400; color: #86868b; }
+.toc-item.depth-3 .toc-item-title { padding-left: 32px; font-weight: 400; color: #aeaeb2; font-size: 11px; }
 .toc-item-page {
   font-size: 10px; color: #e94560; font-weight: 600;
   margin-left: 8px; flex-shrink: 0;

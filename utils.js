@@ -33,18 +33,24 @@ function getImageDimensions(dataURL) {
   });
 }
 
-function toJpegDataURL(dataURL, quality) {
+function toJpegDataURL(dataURL, quality, maxWidth) {
   return new Promise(function (resolve) {
-    if (dataURL.indexOf('image/png') === -1) { resolve(dataURL); return; }
     var img = new Image();
     img.onload = function () {
+      var w = img.width, h = img.height;
+      // Downscale if maxWidth specified and image exceeds it
+      if (maxWidth && w > maxWidth) {
+        var scale = maxWidth / w;
+        w = maxWidth;
+        h = Math.round(img.height * scale);
+      }
       var c = document.createElement('canvas');
-      c.width = img.width;
-      c.height = img.height;
+      c.width = w;
+      c.height = h;
       var ctx = c.getContext('2d');
       ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, c.width, c.height);
-      ctx.drawImage(img, 0, 0);
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
       resolve(c.toDataURL('image/jpeg', quality || 0.92));
     };
     img.onerror = function () { resolve(dataURL); };

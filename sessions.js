@@ -822,6 +822,17 @@
 
     $('errorCloseBtn').addEventListener('click', S.hideError);
     $('errorBackdrop').addEventListener('click', S.hideError);
+
+    // PDF warning dialog
+    $('pdfWarningBackdrop').addEventListener('click', function () { $('pdfWarningDialog').hidden = true; });
+    $('pdfWarningTryBtn').addEventListener('click', function () {
+      $('pdfWarningDialog').hidden = true;
+      S.downloadPDFForce();
+    });
+    $('pdfWarningExportBtn').addEventListener('click', function () {
+      $('pdfWarningDialog').hidden = true;
+      S.exportSession();
+    });
     $('errorCopyBtn').addEventListener('click', function () {
       navigator.clipboard.writeText(getErrorText()).then(function () {
         $('errorCopyBtn').textContent = '복사됨!';

@@ -12,14 +12,18 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   };
 
-  S.downloadPDF = async function () {
+  var JPEG_QUALITY = 0.85;
+
+  S.downloadPDFForce = function () { S._doPDF(true); };
+  S.downloadPDF = function () { S._doPDF(false); };
+
+  S._doPDF = async function (force) {
     if (!S.selectedBookId || !S.selectedBook) return;
     if (typeof window.jspdf === 'undefined') {
       S.showError('라이브러리 로드 실패', 'jsPDF 라이브러리를 찾을 수 없습니다.', 'lib/jspdf.umd.min.js 파일이 존재하는지 확인하세요.');
       return;
     }
 
-    var totalPages = S.selectedBook.totalPages || 0;
     var title = S.selectedBook.title || 'ebook';
     var toc = S.selectedBook.toc || [];
     var sizeVal = S.$('pdfSize').value;
@@ -32,42 +36,60 @@
         tocByPage[t.page].push(t);
       });
     }
-    var outlineParents = {};
 
-    S.showProgress('PDF 생성 중...', 0);
     var sorted = S.capturedPageNums.slice().sort(function (a, b) { return a - b; });
 
+    // Estimate PDF memory: original ~4MB/page, A4 300DPI ~1MB/page
+    var perPageMB = target ? 1 : 4;
+    var estimatedMB = sorted.length * perPageMB;
+    var maxMB = 1000;
+    if (!force && estimatedMB > maxMB) {
+      S.hideProgress();
+      document.getElementById('pdfWarningMsg').textContent =
+        'PDF 예상 용량: ~' + Math.round(estimatedMB / 1024 * 10) / 10 + 'GB (' + sorted.length + '페이지)';
+      document.getElementById('pdfWarningDialog').hidden = false;
+      return;
+    }
+
+    S.showProgress('PDF 생성 중...', 0);
+
     try {
-      var firstPage = await extGetPage(S.selectedBookId, sorted[0]);
-      if (!firstPage || !firstPage.dataURL) throw new Error('첫 페이지 로드 실패');
-
-      var firstDims = await getImageDimensions(firstPage.dataURL);
-      var pageOpts = calcPageDimensions(firstDims.width, firstDims.height, target);
-
       var jsPDF = window.jspdf.jsPDF;
-      var pdf = new jsPDF({
-        orientation: pageOpts.orientation,
-        unit: 'mm',
-        format: [pageOpts.pageW, pageOpts.pageH]
-      });
+      var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
+      var safeName = sanitizeFilename(title);
+
+      var outlineParents = {};
+      var pdf = null;
 
       for (var i = 0; i < sorted.length; i++) {
         var pn = sorted[i];
         S.updateProgress(Math.round((i / sorted.length) * 100), pn + '페이지 처리 중...');
 
-        var page = (i === 0) ? firstPage : await extGetPage(S.selectedBookId, pn);
+        var page = await extGetPage(S.selectedBookId, pn);
         if (!page || !page.dataURL) continue;
 
         var imgDims = await getImageDimensions(page.dataURL);
         var curPageOpts = calcPageDimensions(imgDims.width, imgDims.height, target);
 
-        if (i > 0) {
+        if (!pdf) {
+          pdf = new jsPDF({
+            orientation: curPageOpts.orientation,
+            unit: 'mm',
+            format: [curPageOpts.pageW, curPageOpts.pageH]
+          });
+        } else {
           pdf.addPage([curPageOpts.pageW, curPageOpts.pageH], curPageOpts.orientation);
         }
 
         var layout = calcImageLayout(imgDims.width, imgDims.height, curPageOpts.pageW, curPageOpts.pageH, target);
-        var jpegURL = await toJpegDataURL(page.dataURL, 1.0);
+        // Downscale to 300DPI for target size (A4 etc.) — drastically reduces file size
+        var maxW = target ? Math.round(curPageOpts.pageW / 25.4 * 300) : 0;
+        var jpegURL = await toJpegDataURL(page.dataURL, JPEG_QUALITY, maxW);
         pdf.addImage(jpegURL, 'JPEG', layout.x, layout.y, layout.w, layout.h);
+
+        // Free memory immediately
+        page.dataURL = null;
+        jpegURL = null;
 
         if (tocByPage[pn]) {
           tocByPage[pn].forEach(function (entry) {
@@ -82,15 +104,46 @@
         }
       }
 
-      S.updateProgress(100, '파일 저장 중...');
-      var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
-      pdf.save(sanitizeFilename(title) + sizeSuffix + '.pdf');
+      if (pdf) {
+        S.updateProgress(100, '파일 저장 중...');
+        try {
+          pdf.save(safeName + sizeSuffix + '.pdf');
+        } catch (saveErr) {
+          if (saveErr.message && saveErr.message.indexOf('string length') !== -1) {
+            pdf = null;
+            S.hideProgress();
+            var doExport = confirm(
+              'PDF 용량 초과 — 브라우저 메모리 한계 도달\n\n' +
+              'ZIP 이미지 + Python 병합 스크립트를 다운로드하시겠습니까?\n\n' +
+              '사용법:\n' +
+              '  1. pip install Pillow\n' +
+              '  2. python merge_pdf.py <zip파일>'
+            );
+            if (doExport) {
+              try {
+                var scriptUrl = chrome.runtime.getURL('merge_pdf.py');
+                var a = document.createElement('a');
+                a.href = scriptUrl;
+                a.download = 'merge_pdf.py';
+                a.click();
+              } catch (e) {}
+              S.downloadZIP();
+            }
+            return;
+          }
+          throw saveErr;
+        }
+        pdf = null;
+      }
+
       S.hideProgress();
       S.showToast('PDF 저장 완료!');
     } catch (e) {
+      S.hideProgress();
       S.showError('PDF 생성 실패', 'PDF 파일을 생성하는 중 오류가 발생했습니다.', S.formatErrorDetail(e));
     }
   };
+
 
   S.downloadZIP = async function () {
     if (!S.selectedBookId || !S.selectedBook) return;
@@ -174,6 +227,14 @@
         pagesFolder.file(padNum + ext, base64, { base64: true });
         pagesFolder.file(padNum + '.json', JSON.stringify(pageInfo));
       }
+
+      // Include merge scripts (py + bat for one-click)
+      try {
+        var pyResp = await fetch(chrome.runtime.getURL('merge_pdf.py'));
+        if (pyResp.ok) zip.file('merge_pdf.py', await pyResp.text());
+        var batResp = await fetch(chrome.runtime.getURL('merge_pdf.bat'));
+        if (batResp.ok) zip.file('PDF 생성.bat', await batResp.text());
+      } catch (e) {}
 
       S.updateProgress(95, 'ZIP 압축 중...');
       var blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });

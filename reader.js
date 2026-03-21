@@ -490,9 +490,12 @@
       return;
     }
     list.innerHTML = toc.map(function (item) {
-      var dc = item.depth > 1 ? ' depth-' + item.depth : '';
+      var d = Math.min(item.depth || 1, 10);
+      var dc = d > 1 ? ' depth-' + Math.min(d, 3) : '';
+      // depth 4+ uses inline padding (16px per level)
+      var inlineStyle = d > 3 ? ' style="padding-left:' + (d * 16) + 'px;font-weight:400;color:#aeaeb2;font-size:11px"' : '';
       return '<div class="toc-item' + dc + '" data-page="' + item.page + '">' +
-        '<span class="toc-item-title">' + escHTML(item.title) + '</span>' +
+        '<span class="toc-item-title"' + inlineStyle + '>' + escHTML(item.title) + '</span>' +
         '<span class="toc-item-page">' + item.page + 'p</span></div>';
     }).join('');
 
@@ -770,44 +773,73 @@
         });
       }
 
-      var allPages = [];
-      for (var i = 0; i < targetPages.length; i++) {
-        var p;
-        if (pageCache.has(targetPages[i].pageNum)) {
-          p = { dataURL: pageCache.get(targetPages[i].pageNum), width: targetPages[i].width, height: targetPages[i].height };
-        } else {
-          p = await extGetPage(bookId, targetPages[i].pageNum);
-        }
-        if (p && p.dataURL) allPages.push(p);
-      }
-      if (allPages.length === 0) throw new Error('No pages');
+      if (targetPages.length === 0) throw new Error('No pages');
 
       var sizeVal = getSelectedPdfSize();
       var targetSize = SIZE_PRESETS[sizeVal] || null;
-      var f = allPages[0];
-      var dims0 = calcPageDimensions(f.width, f.height, targetSize);
-      var pdf = new window.jspdf.jsPDF({
-        orientation: dims0.orientation, unit: 'mm', format: [dims0.pageW, dims0.pageH]
-      });
-      for (var j = 0; j < allPages.length; j++) {
-        var pg = allPages[j];
-        var d = calcPageDimensions(pg.width, pg.height, targetSize);
-        var lay = calcImageLayout(pg.width, pg.height, d.pageW, d.pageH, targetSize);
-        if (j > 0) pdf.addPage([d.pageW, d.pageH], d.orientation);
-        pdf.addImage(pg.dataURL, 'JPEG', lay.x, lay.y, lay.w, lay.h);
+      var QUALITY = 0.85;
+
+      // Memory check
+      var perPageMB = targetSize ? 1 : 4;
+      var estimatedMB = targetPages.length * perPageMB;
+      if (estimatedMB > 1000) {
+        if (!confirm('PDF 예상 용량: ~' + Math.round(estimatedMB / 1024 * 10) / 10 + 'GB\n브라우저에서 실패할 수 있습니다. 계속하시겠습니까?')) {
+          btn.disabled = false;
+          btn.textContent = 'PDF 다운로드';
+          return;
+        }
       }
-      if (toc && toc.length > 0 && pdf.outline) {
-        try {
-          var fpn = targetPages[0].pageNum, lpn = targetPages[targetPages.length - 1].pageNum;
-          toc.forEach(function (item) {
-            if (item.page >= fpn && item.page <= lpn) {
-              for (var k = 0; k < targetPages.length; k++) {
-                if (targetPages[k].pageNum >= item.page) { pdf.outline.add(null, item.title, { pageNumber: k + 1 }); break; }
-              }
-            }
+
+      var pdf = null;
+      var outlineParents = {};
+      var tocByPage = {};
+      if (toc && toc.length > 0) {
+        toc.forEach(function (t) {
+          if (!tocByPage[t.page]) tocByPage[t.page] = [];
+          tocByPage[t.page].push(t);
+        });
+      }
+
+      for (var j = 0; j < targetPages.length; j++) {
+        btn.textContent = (j + 1) + '/' + targetPages.length + ' 처리 중...';
+        var pg;
+        if (pageCache.has(targetPages[j].pageNum)) {
+          pg = { dataURL: pageCache.get(targetPages[j].pageNum), width: targetPages[j].width, height: targetPages[j].height };
+        } else {
+          pg = await extGetPage(bookId, targetPages[j].pageNum);
+        }
+        if (!pg || !pg.dataURL) continue;
+
+        var imgDims = await getImageDimensions(pg.dataURL);
+        var d = calcPageDimensions(imgDims.width, imgDims.height, targetSize);
+        var lay = calcImageLayout(imgDims.width, imgDims.height, d.pageW, d.pageH, targetSize);
+
+        if (!pdf) {
+          pdf = new window.jspdf.jsPDF({ orientation: d.orientation, unit: 'mm', format: [d.pageW, d.pageH] });
+        } else {
+          pdf.addPage([d.pageW, d.pageH], d.orientation);
+        }
+
+        var maxW = targetSize ? Math.round(d.pageW / 25.4 * 300) : 0;
+        var jpegURL = await toJpegDataURL(pg.dataURL, QUALITY, maxW);
+        pdf.addImage(jpegURL, 'JPEG', lay.x, lay.y, lay.w, lay.h);
+        pg.dataURL = null;
+        jpegURL = null;
+
+        var pn = targetPages[j].pageNum;
+        if (tocByPage[pn]) {
+          tocByPage[pn].forEach(function (entry) {
+            try {
+              var depth = entry.depth || 1;
+              var parent = depth > 1 ? (outlineParents[depth - 1] || null) : null;
+              var node = pdf.outline.add(parent, entry.title || ('Page ' + pn), { pageNumber: j + 1 });
+              outlineParents[depth] = node;
+              for (var dd = depth + 1; dd <= 10; dd++) delete outlineParents[dd];
+            } catch (e) {}
           });
-        } catch (e) {}
+        }
       }
+      if (!pdf) throw new Error('No pages');
       var safe = (bookTitle || 'ebook').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').replace(/^[\s.]+|[\s.]+$/g, '').slice(0, 200);
       var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
       var rangeSuffix = range ? '_p' + range.start + '-' + range.end : '';
