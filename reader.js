@@ -15,18 +15,6 @@
 
   var $ = function (id) { return document.getElementById(id); };
 
-  var SIZE_PRESETS = { original: null, a4: { w: 210, h: 297 }, b5: { w: 182, h: 257 }, a5: { w: 148, h: 210 } };
-
-  function calcPageDims(pxW, pxH, target) {
-    var mmW = (pxW / 96) * 25.4, mmH = (pxH / 96) * 25.4;
-    if (!target) return { pageW: mmW, pageH: mmH, imgW: mmW, imgH: mmH, x: 0, y: 0 };
-    var tw = target.w, th = target.h;
-    if (pxW > pxH) { tw = Math.max(target.w, target.h); th = Math.min(target.w, target.h); }
-    else { tw = Math.min(target.w, target.h); th = Math.max(target.w, target.h); }
-    var scale = Math.min(tw / mmW, th / mmH);
-    var sw = mmW * scale, sh = mmH * scale;
-    return { pageW: tw, pageH: th, imgW: sw, imgH: sh, x: (tw - sw) / 2, y: (th - sh) / 2 };
-  }
 
   // ── Book selector ──
   async function showBookSelector() {
@@ -797,15 +785,16 @@
       var sizeVal = getSelectedPdfSize();
       var targetSize = SIZE_PRESETS[sizeVal] || null;
       var f = allPages[0];
-      var dims0 = calcPageDims(f.width, f.height, targetSize);
+      var dims0 = calcPageDimensions(f.width, f.height, targetSize);
       var pdf = new window.jspdf.jsPDF({
-        orientation: dims0.pageW > dims0.pageH ? 'landscape' : 'portrait', unit: 'mm', format: [dims0.pageW, dims0.pageH]
+        orientation: dims0.orientation, unit: 'mm', format: [dims0.pageW, dims0.pageH]
       });
       for (var j = 0; j < allPages.length; j++) {
         var pg = allPages[j];
-        var d = calcPageDims(pg.width, pg.height, targetSize);
-        if (j > 0) pdf.addPage([d.pageW, d.pageH], d.pageW > d.pageH ? 'landscape' : 'portrait');
-        pdf.addImage(pg.dataURL, 'JPEG', d.x, d.y, d.imgW, d.imgH);
+        var d = calcPageDimensions(pg.width, pg.height, targetSize);
+        var lay = calcImageLayout(pg.width, pg.height, d.pageW, d.pageH, targetSize);
+        if (j > 0) pdf.addPage([d.pageW, d.pageH], d.orientation);
+        pdf.addImage(pg.dataURL, 'JPEG', lay.x, lay.y, lay.w, lay.h);
       }
       if (toc && toc.length > 0 && pdf.outline) {
         try {

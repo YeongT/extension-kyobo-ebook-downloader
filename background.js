@@ -322,57 +322,58 @@ async function startCaptureForBook(bookTitle, resume) {
   }
 }
 
-// ── Move viewer tabs to a dedicated popup window ──
-// When a kyobo viewer tab is created, move it to its own window
-// so canvas rendering persists even when the main browser window loses focus.
+// ── Move viewer tabs to a dedicated normal window ──
+// Separate window keeps canvas rendering active when main window loses focus.
+// Uses 'normal' type (not 'popup') to preserve full viewport size for DPR capture.
 var _viewerWindowId = null;
 
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
   if (changeInfo.status !== 'complete') return;
   if (!tab.url || tab.url.indexOf('wviewer.kyobobook.co.kr') === -1) return;
 
-  // Already in a popup window?
   chrome.windows.get(tab.windowId, function (win) {
     if (chrome.runtime.lastError || !win) return;
-    if (win.type === 'popup') {
-      _viewerWindowId = win.id;
-      return;
-    }
-
-    // Move tab to existing popup window or create one
-    if (_viewerWindowId) {
-      chrome.windows.get(_viewerWindowId, function (existingWin) {
-        if (chrome.runtime.lastError || !existingWin) {
-          createViewerWindow(tabId);
-        } else {
-          chrome.tabs.move(tabId, { windowId: _viewerWindowId, index: -1 }, function () {
-            if (chrome.runtime.lastError) {
-              createViewerWindow(tabId);
-            } else {
-              chrome.tabs.update(tabId, { active: true });
-            }
-          });
-        }
-      });
-    } else {
-      createViewerWindow(tabId);
-    }
+    // Already in its own window (not the main one with many tabs)
+    chrome.tabs.query({ windowId: win.id }, function (tabs) {
+      if (chrome.runtime.lastError) return;
+      if (tabs && tabs.length <= 1) {
+        _viewerWindowId = win.id;
+        return;
+      }
+      // Multiple tabs in this window — move viewer to its own
+      if (_viewerWindowId) {
+        chrome.windows.get(_viewerWindowId, function (existingWin) {
+          if (chrome.runtime.lastError || !existingWin) {
+            createViewerWindow(tabId);
+          } else {
+            chrome.tabs.move(tabId, { windowId: _viewerWindowId, index: -1 }, function () {
+              if (chrome.runtime.lastError) {
+                createViewerWindow(tabId);
+              } else {
+                chrome.tabs.update(tabId, { active: true });
+              }
+            });
+          }
+        });
+      } else {
+        createViewerWindow(tabId);
+      }
+    });
   });
 });
 
 function createViewerWindow(tabId) {
+  // Use screen dimensions for full-size window (preserves DPR canvas resolution)
   chrome.windows.create({
     tabId: tabId,
-    type: 'popup',
-    width: 900,
-    height: 1000,
+    type: 'normal',
+    state: 'maximized',
     focused: true
   }, function (win) {
     if (win) _viewerWindowId = win.id;
   });
 }
 
-// Clean up reference when popup window is closed
 chrome.windows.onRemoved.addListener(function (windowId) {
   if (windowId === _viewerWindowId) _viewerWindowId = null;
 });

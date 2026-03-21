@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  var S = window._S;
+
   // ── Global error handler ──
   function formatErrorDetail(err, extra) {
     var parts = [];
@@ -14,6 +16,7 @@
     }
     return parts.join('\n\n') || '(상세 정보 없음)';
   }
+  S.formatErrorDetail = formatErrorDetail;
 
   function showGlobalError(titleText, msgText, err, extra) {
     console.error('[SessionManager]', titleText, err);
@@ -49,20 +52,68 @@
     showGlobalError('처리 중 오류 발생', msg, reason);
   });
 
-  // ── State ──
-  var books = [];
-  var selectedBookId = null;
-  var selectedBook = null;
-  var capturedPageNums = [];
-  var previewPageNum = 0;
-  var isScanning = false;
-  var scanPollInterval = null;
+  // ── Shared state ──
+  S.books = [];
+  S.selectedBookId = null;
+  S.selectedBook = null;
+  S.capturedPageNums = [];
 
-  var $ = function (id) { return document.getElementById(id); };
+  // ── DOM shortcut ──
+  S.$ = function (id) { return document.getElementById(id); };
+  var $ = S.$;
+
+  // ── Helpers (progress, toast, error) ──
+  S.showProgress = function (title, pct) {
+    $('progressOverlay').hidden = false;
+    $('progressTitle').textContent = title;
+    $('progressFill').style.width = pct + '%';
+    $('progressText').textContent = pct + '%';
+  };
+
+  S.updateProgress = function (pct, text) {
+    $('progressFill').style.width = pct + '%';
+    $('progressText').textContent = text || (pct + '%');
+  };
+
+  S.hideProgress = function () {
+    $('progressOverlay').hidden = true;
+  };
+
+  var toastTimer = null;
+  S.showToast = function (msg) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3000);
+  };
+
+  S.showError = function (title, message, detail) {
+    console.error('[SessionManager]', title, message, detail);
+    S.hideProgress();
+    $('errorDialog').hidden = false;
+    $('errorTitle').textContent = title || '오류 발생';
+    $('errorMessage').textContent = message || '';
+    $('errorDetail').textContent = detail || '(상세 정보 없음)';
+  };
+
+  S.hideError = function () {
+    $('errorDialog').hidden = true;
+  };
+
+  function getErrorText() {
+    var title = $('errorTitle').textContent;
+    var message = $('errorMessage').textContent;
+    var detail = $('errorDetail').textContent;
+    var parts = [title];
+    if (message) parts.push(message);
+    if (detail) parts.push('\n' + detail);
+    return parts.join('\n');
+  }
 
   // ── Init ──
   async function init() {
-    await loadBooks();
+    await S.loadBooks();
     setupEventListeners();
     setupScanListeners();
 
@@ -73,7 +124,7 @@
     if (titleParam) {
       await openByTitle(titleParam);
     } else if (bookParam) {
-      selectBook(bookParam);
+      S.selectBook(bookParam);
     }
   }
 
@@ -83,65 +134,62 @@
     try { bookId = await extFindBookByTitle(title); } catch (e) {}
 
     if (bookId) {
-      selectBook(bookId);
+      S.selectBook(bookId);
       return;
     }
 
-    // New book - not yet scanned. Create placeholder.
-    selectedBookId = 'title:' + title;
-    selectedBook = { bookId: selectedBookId, title: title, totalPages: 0, toc: [], cachedCount: 0 };
-    capturedPageNums = [];
+    S.selectedBookId = 'title:' + title;
+    S.selectedBook = { bookId: S.selectedBookId, title: title, totalPages: 0, toc: [], cachedCount: 0 };
+    S.capturedPageNums = [];
 
-    // Try to get book info from library (stored temporarily)
     try {
       var stored = await new Promise(function (res) {
         chrome.storage.local.get('sessionManagerBook', function (d) { res(d.sessionManagerBook); });
       });
       if (stored && stored.title === title) {
-        selectedBook.author = stored.author;
-        selectedBook.coverUrl = stored.coverUrl;
-        selectedBook.dueDate = stored.dueDate;
+        S.selectedBook.author = stored.author;
+        S.selectedBook.coverUrl = stored.coverUrl;
+        S.selectedBook.dueDate = stored.dueDate;
       }
     } catch (e) {}
 
     $('emptyState').hidden = true;
     $('bookDetail').hidden = false;
-    renderBookList();
-    renderDetail();
+    S.renderBookList();
+    S.renderDetail();
   }
 
   // ── Load books from IndexedDB ──
-  async function loadBooks() {
+  S.loadBooks = async function () {
     try {
-      books = await extGetAllBooks();
-      books.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+      S.books = await extGetAllBooks();
+      S.books.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
     } catch (e) {
-      books = [];
+      S.books = [];
     }
-    renderBookList();
-  }
+    S.renderBookList();
+  };
 
   // ── Render sidebar book list ──
-  function renderBookList() {
+  S.renderBookList = function () {
     var container = $('bookList');
-    if (!books || books.length === 0) {
+    if (!S.books || S.books.length === 0) {
       container.innerHTML = '<div class="book-list-empty">캐시된 도서가 없습니다</div>';
       return;
     }
 
-    // Load all inspection data for sidebar ring colors
-    var inspectionKeys = books.map(function (b) { return 'inspection_' + b.bookId; });
+    var inspectionKeys = S.books.map(function (b) { return 'inspection_' + b.bookId; });
     chrome.storage.local.get(inspectionKeys, function (stored) {
       var html = '';
-      for (var i = 0; i < books.length; i++) {
-        var b = books[i];
+      for (var i = 0; i < S.books.length; i++) {
+        var b = S.books[i];
         var insp = stored['inspection_' + b.bookId];
         var suspectCount = insp && insp.suspectPages ? insp.suspectPages.length : 0;
         var confirmed = (b.cachedCount || 0) - suspectCount;
         var pct = (b.totalPages > 0 && confirmed > 0)
           ? Math.round(confirmed / b.totalPages * 100)
           : 0;
-        var isActive = b.bookId === selectedBookId;
+        var isActive = b.bookId === S.selectedBookId;
         var isComplete = b.totalPages > 0 && confirmed >= b.totalPages;
         var hasSuspect = suspectCount > 0;
 
@@ -173,62 +221,62 @@
 
       container.querySelectorAll('.book-item').forEach(function (el) {
         el.addEventListener('click', function () {
-          selectBook(this.dataset.bookid);
+          S.selectBook(this.dataset.bookid);
         });
       });
     });
-  }
+  };
 
   // ── Select a book ──
-  async function selectBook(bookId) {
-    gridLoadAbort = true; // cancel any running thumbnail load
-    thumbCache = {};
-    selectedBookId = bookId;
-    selectedBook = null;
-    capturedPageNums = [];
-    confirmedPages = {};
+  S.selectBook = async function (bookId) {
+    S.gridLoadAbort = true;
+    S.thumbCache = {};
+    S.selectedBookId = bookId;
+    S.selectedBook = null;
+    S.capturedPageNums = [];
+    S.confirmedPages = {};
 
     $('emptyState').hidden = true;
     $('bookDetail').hidden = false;
 
-    loadConfirmedPages();
-    renderBookList();
+    S.loadConfirmedPages();
+    S.renderBookList();
 
     try {
-      selectedBook = await extGetBookMeta(bookId);
+      S.selectedBook = await extGetBookMeta(bookId);
       var pagesInfo = await extGetPagesInfo(bookId);
-      capturedPageNums = pagesInfo.map(function (p) { return p.pageNum; }).sort(function (a, b) { return a - b; });
+      S.capturedPageNums = pagesInfo.map(function (p) { return p.pageNum; }).sort(function (a, b) { return a - b; });
     } catch (e) {
-      selectedBook = null;
-      capturedPageNums = [];
+      S.selectedBook = null;
+      S.capturedPageNums = [];
     }
 
-    if (!selectedBook) {
-      selectedBook = findBookInList(bookId);
+    if (!S.selectedBook) {
+      S.selectedBook = S.findBookInList(bookId);
     }
 
-    renderDetail();
-  }
+    S.renderDetail();
+  };
 
-  function findBookInList(bookId) {
-    for (var i = 0; i < books.length; i++) {
-      if (books[i].bookId === bookId) return books[i];
+  S.findBookInList = function (bookId) {
+    for (var i = 0; i < S.books.length; i++) {
+      if (S.books[i].bookId === bookId) return S.books[i];
     }
     return null;
-  }
+  };
 
   // ── Render book detail ──
-  function renderDetail() {
-    if (!selectedBook) {
+  S.renderDetail = function () {
+    if (!S.selectedBook) {
       $('bookDetail').hidden = true;
       $('emptyState').hidden = false;
       return;
     }
 
-    var title = selectedBook.title || '(제목 없음)';
-    var totalPages = selectedBook.totalPages || 0;
-    var cachedCount = capturedPageNums.length;
-    var suspectCount = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages.length : 0;
+    var title = S.selectedBook.title || '(제목 없음)';
+    var totalPages = S.selectedBook.totalPages || 0;
+    var cachedCount = S.capturedPageNums.length;
+    var suspectCount = S.inspectionData && S.inspectionData.suspectPages ? S.inspectionData.suspectPages.length : 0;
     var confirmedCount = cachedCount - suspectCount;
     var missingCount = totalPages > 0 ? totalPages - cachedCount : 0;
     var pct = totalPages > 0 ? Math.round(confirmedCount / totalPages * 100) : 0;
@@ -237,7 +285,6 @@
 
     $('detailTitle').textContent = title;
 
-    // Meta info
     if (hasData) {
       var metaHtml = '<span>' + esc(String(totalPages)) + ' 페이지</span>' +
         '<span>' + esc(String(cachedCount)) + ' 캡처됨</span>';
@@ -247,8 +294,8 @@
       if (missingCount > 0) {
         metaHtml += '<span style="color:#ff9500">' + esc(String(missingCount)) + ' 누락</span>';
       }
-      if (selectedBook.timestamp) {
-        metaHtml += '<span>' + esc(timeAgo(selectedBook.timestamp)) + '</span>';
+      if (S.selectedBook.timestamp) {
+        metaHtml += '<span>' + esc(timeAgo(S.selectedBook.timestamp)) + '</span>';
       }
       $('detailMeta').innerHTML = metaHtml;
       $('detailMeta').hidden = false;
@@ -257,14 +304,12 @@
       $('detailMeta').hidden = false;
     }
 
-    // Progress bar — suspect pages excluded from completion
     var fill = $('detailFill');
     fill.style.width = pct + '%';
     fill.className = 'progress-fill' + (isComplete ? ' complete' : suspectCount > 0 ? ' has-suspect' : '');
     $('detailProgress').textContent = hasData ? pct + '%' : '';
     $('detailFill').parentElement.parentElement.hidden = !hasData;
 
-    // Completion badge
     if (isComplete) {
       if (!$('completeBadge')) {
         var badge = document.createElement('div');
@@ -278,10 +323,8 @@
       $('completeBadge').hidden = true;
     }
 
-    // Scan card only visible during active scanning
-    $('scanCard').hidden = !isScanning;
+    $('scanCard').hidden = !S.isScanning;
 
-    // Show/hide sections based on data availability
     var hideDownload = cachedCount === 0;
     $('downloadToolbar').hidden = hideDownload;
     $('pdfGroup').hidden = hideDownload;
@@ -289,26 +332,23 @@
     $('openReaderBtn').disabled = !isComplete;
     $('gridSection').hidden = totalPages === 0;
 
-    // TOC
-    renderTOC();
-
-    renderMissingRanges();
-    renderPageGrid();
+    S.renderTOC();
+    S.renderMissingRanges();
+    S.renderPageGrid();
     renderScanControls();
-  }
+  };
 
-  // Lightweight header-only refresh (after inspection updates suspect data)
-  function refreshDetailHeader() {
-    if (!selectedBook) return;
-    var totalPages = selectedBook.totalPages || 0;
-    var cachedCount = capturedPageNums.length;
-    var suspectCount = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages.length : 0;
+  // Lightweight header-only refresh
+  S.refreshDetailHeader = function () {
+    if (!S.selectedBook) return;
+    var totalPages = S.selectedBook.totalPages || 0;
+    var cachedCount = S.capturedPageNums.length;
+    var suspectCount = S.inspectionData && S.inspectionData.suspectPages ? S.inspectionData.suspectPages.length : 0;
     var confirmedCount = cachedCount - suspectCount;
     var missingCount = totalPages > 0 ? totalPages - cachedCount : 0;
     var pct = totalPages > 0 ? Math.round(confirmedCount / totalPages * 100) : 0;
     var isComplete = totalPages > 0 && confirmedCount >= totalPages;
 
-    // Update meta
     var metaHtml = '<span>' + esc(String(totalPages)) + ' 페이지</span>' +
       '<span>' + esc(String(cachedCount)) + ' 캡처됨</span>';
     if (suspectCount > 0) {
@@ -317,18 +357,16 @@
     if (missingCount > 0) {
       metaHtml += '<span style="color:#ff9500">' + esc(String(missingCount)) + ' 누락</span>';
     }
-    if (selectedBook.timestamp) {
-      metaHtml += '<span>' + esc(timeAgo(selectedBook.timestamp)) + '</span>';
+    if (S.selectedBook.timestamp) {
+      metaHtml += '<span>' + esc(timeAgo(S.selectedBook.timestamp)) + '</span>';
     }
     $('detailMeta').innerHTML = metaHtml;
 
-    // Update progress bar
     var fill = $('detailFill');
     fill.style.width = pct + '%';
     fill.className = 'progress-fill' + (isComplete ? ' complete' : suspectCount > 0 ? ' has-suspect' : '');
     $('detailProgress').textContent = pct + '%';
 
-    // Update completion badge + button states
     if (isComplete) {
       if ($('completeBadge')) $('completeBadge').hidden = false;
     } else {
@@ -336,16 +374,15 @@
     }
     $('dlPdf').disabled = !isComplete;
     $('openReaderBtn').disabled = !isComplete;
-  }
+  };
 
-  function updateTocMissingRow() {
+  S.updateTocMissingRow = function () {
     var row = $('tocMissingRow');
     if (!row) return;
     var tocVisible = !$('tocSection').hidden;
     var missingVisible = !$('missingSection').hidden;
     row.hidden = !tocVisible && !missingVisible;
     if (row.hidden) return;
-    // Update header label
     var label = $('infoPanelsLabel');
     if (tocVisible && missingVisible) {
       label.textContent = '목차 · 누락/의심 구간';
@@ -354,28 +391,27 @@
     } else {
       label.textContent = '누락 · 의심 구간';
     }
-  }
+  };
 
   // ── Render TOC ──
-  function renderTOC() {
-    var toc = (selectedBook && selectedBook.toc) || [];
+  S.renderTOC = function () {
+    var toc = (S.selectedBook && S.selectedBook.toc) || [];
     var section = $('tocSection');
 
     if (!toc || toc.length === 0) {
       section.hidden = true;
-      updateTocMissingRow();
+      S.updateTocMissingRow();
       return;
     }
 
     section.hidden = false;
-    updateTocMissingRow();
+    S.updateTocMissingRow();
     $('tocLabel').textContent = '목차 (' + toc.length + '항목)';
 
     var html = '';
     for (var i = 0; i < toc.length; i++) {
       var entry = toc[i];
       var depth = Math.min(entry.depth || 1, 3);
-      var hasCaptured = capturedPageNums.indexOf(entry.page) !== -1;
       html += '<div class="toc-item depth-' + depth + '" data-page="' + entry.page + '">' +
         '<span class="toc-page">' + (entry.page || '') + '</span>' +
         '<span class="toc-title">' + esc(entry.title || '') + '</span>' +
@@ -383,714 +419,25 @@
     }
     $('tocList').innerHTML = html;
 
-    // Click TOC item → preview that page
     $('tocList').querySelectorAll('.toc-item').forEach(function (el) {
       el.addEventListener('click', function () {
         var pg = parseInt(this.dataset.page, 10);
-        if (pg && capturedPageNums.indexOf(pg) !== -1) {
-          openPreview(pg);
+        if (pg && S.capturedPageNums.indexOf(pg) !== -1) {
+          S.openPreview(pg);
         }
       });
     });
-  }
-
-  // ── Render page grid with thumbnails ──
-  var thumbCache = {}; // pageNum → dataURL (small)
-  var gridLoadAbort = false;
-
-  function renderPageGrid() {
-    var grid = $('pageGrid');
-    var totalPages = (selectedBook && selectedBook.totalPages) || 0;
-
-    if (totalPages === 0) {
-      grid.innerHTML = '';
-      return;
-    }
-
-    var capturedSet = {};
-    capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
-
-    var html = '';
-    for (var p = 1; p <= totalPages; p++) {
-      var isCaptured = !!capturedSet[p];
-      html += '<div class="page-tile ' + (isCaptured ? 'captured' : 'missing') + '" data-page="' + p + '" data-loaded="false" title="' + p + '페이지' + (isCaptured ? '' : ' (누락)') + '">' +
-        '<input type="checkbox" class="tile-check" data-page="' + p + '">' +
-        '<span class="tile-num">' + p + '</span>' +
-      '</div>';
-    }
-    grid.innerHTML = html;
-
-    grid.querySelectorAll('.page-tile.captured').forEach(function (tile) {
-      tile.addEventListener('click', function (e) {
-        if (e.target.classList.contains('tile-check')) return;
-        openPreview(parseInt(this.dataset.page, 10));
-      });
-    });
-
-    $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
-    updateFilterCounts();
-
-    // Load thumbnails — skip full inspection if no changes
-    loadAllThumbnails();
-  }
-
-  // ── Update filter count badges ──
-  function updateFilterCounts() {
-    var grid = $('pageGrid');
-    if (!grid) return;
-    var counts = {
-      all: grid.querySelectorAll('.page-tile').length,
-      captured: grid.querySelectorAll('.page-tile.captured').length,
-      suspect: grid.querySelectorAll('.page-tile.suspect').length,
-      missing: grid.querySelectorAll('.page-tile.missing').length,
-      failed: grid.querySelectorAll('.page-tile.failed').length
-    };
-    $('gridFilters').querySelectorAll('.grid-filter').forEach(function (btn) {
-      var filter = btn.dataset.filter;
-      var count = counts[filter] || 0;
-      var badge = btn.querySelector('.filter-count');
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'filter-count';
-        btn.appendChild(badge);
-      }
-      badge.textContent = count;
-      badge.className = 'filter-count' + (count === 0 ? ' zero' : '');
-    });
-  }
-
-  // Persisted inspection results
-  var inspectionData = null; // { count, suspectPages, thumbs }
-
-  function getInspectionKey() { return 'inspection_' + selectedBookId; }
-
-  function loadInspection() {
-    return new Promise(function (resolve) {
-      chrome.storage.local.get(getInspectionKey(), function (d) {
-        resolve(d[getInspectionKey()] || null);
-      });
-    });
-  }
-
-  function saveInspection(suspectPages, thumbs, pageSet) {
-    var obj = {};
-    obj[getInspectionKey()] = {
-      count: capturedPageNums.length,
-      pageSet: pageSet || null, // array of inspected page numbers
-      suspectPages: suspectPages,
-      thumbs: thumbs,
-      timestamp: Date.now()
-    };
-    chrome.storage.local.set(obj);
-  }
-
-  function clearInspection() {
-    chrome.storage.local.remove(getInspectionKey());
-    inspectionData = null;
-    thumbCache = {};
-  }
-
-  var _inspectionRunning = false;
-
-  async function loadAllThumbnails() {
-    if (_inspectionRunning) return; // prevent concurrent runs
-    var captured = capturedPageNums.slice();
-    if (captured.length === 0) return;
-    _inspectionRunning = true;
-
-    // Check if we already have valid inspection data
-    var stored = await loadInspection();
-    if (stored && stored.count === captured.length) {
-      // No changes — apply stored results without re-inspecting
-      inspectionData = stored;
-      applyStoredInspection(stored);
-      updateFilterCounts();
-      refreshDetailHeader();
-      renderMissingRanges();
-      _inspectionRunning = false;
-      return;
-    }
-
-    // Find which pages are new (not in previous inspection)
-    var prevSet = {};
-    if (stored && stored.pageSet) {
-      stored.pageSet.forEach(function (p) { prevSet[p] = true; });
-    }
-    var newPages = [];
-    for (var ni = 0; ni < captured.length; ni++) {
-      if (!prevSet[captured[ni]]) newPages.push(captured[ni]);
-    }
-
-    // Carry over previous results for unchanged pages
-    var suspectPages = [];
-    var thumbs = {};
-    if (stored) {
-      if (stored.thumbs) {
-        Object.keys(stored.thumbs).forEach(function (k) {
-          var pk = parseInt(k, 10);
-          if (captured.indexOf(pk) !== -1) thumbs[pk] = stored.thumbs[k];
-        });
-      }
-      if (stored.suspectPages) {
-        stored.suspectPages.forEach(function (p) {
-          if (captured.indexOf(p) !== -1) suspectPages.push(p);
-        });
-      }
-    }
-
-    // Apply carried-over thumbnails and suspect status immediately
-    applyStoredInspection({ thumbs: thumbs, suspectPages: suspectPages });
-
-    // Only inspect new pages
-    var toInspect = newPages.length > 0 ? newPages : captured;
-    // If we have prior data, only check new ones
-    if (stored && newPages.length === 0) {
-      // Nothing new to inspect
-      inspectionData = { count: captured.length, pageSet: captured.slice(), suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
-      saveInspection(suspectPages, thumbs, captured);
-      updateFilterCounts();
-      refreshDetailHeader();
-      renderMissingRanges();
-      _inspectionRunning = false;
-      return;
-    }
-
-    gridLoadAbort = false;
-    if (toInspect.length > 20) showProgress('페이지 검사 중...', 0);
-    var newSuspect = 0;
-
-    // First pass: collect page dimensions to detect outliers
-    var pageDims = {}; // pn → { w, h }
-    var dimCounts = {}; // "WxH" → count
-
-    for (var i = 0; i < toInspect.length; i++) {
-      if (gridLoadAbort) break;
-      var pn = toInspect[i];
-      var tile = $('pageGrid').querySelector('[data-page="' + pn + '"]');
-      if (!tile) continue;
-
-      if (toInspect.length > 20) {
-        updateProgress(Math.round((i / toInspect.length) * 100), (i + 1) + '/' + toInspect.length + ' 검사 중...');
-      }
-
-      try {
-        var pg = await extGetPage(selectedBookId, pn);
-        if (!pg || !pg.dataURL) continue;
-
-        // Track dimensions
-        if (pg.width && pg.height) {
-          pageDims[pn] = { w: pg.width, h: pg.height };
-          var dimKey = pg.width + 'x' + pg.height;
-          dimCounts[dimKey] = (dimCounts[dimKey] || 0) + 1;
-        }
-
-        var thumbURL = await createThumbnail(pg.dataURL, 160);
-        thumbCache[pn] = thumbURL;
-        thumbs[pn] = thumbURL;
-
-        var img = document.createElement('img');
-        img.className = 'tile-thumb';
-        img.src = thumbURL;
-        tile.insertBefore(img, tile.firstChild);
-        tile.dataset.loaded = 'true';
-
-        if (!confirmedPages[pn]) {
-          var isBlank = await checkBlankFromData(pg.dataURL);
-          if (isBlank) {
-            tile.classList.remove('captured');
-            tile.classList.add('suspect');
-            tile.title = pn + '페이지 (빈 페이지 의심)';
-            if (suspectPages.indexOf(pn) === -1) suspectPages.push(pn);
-            newSuspect++;
-          }
-        }
-      } catch (e) {}
-    }
-
-    // Collect dims from all pages (lightweight, no dataURL)
-    try {
-      var allPagesInfo = await extGetPagesInfo(selectedBookId);
-      allPagesInfo.forEach(function (pi) {
-        if (!pageDims[pi.pageNum] && pi.width && pi.height) {
-          pageDims[pi.pageNum] = { w: pi.width, h: pi.height };
-          var pk = pi.width + 'x' + pi.height;
-          dimCounts[pk] = (dimCounts[pk] || 0) + 1;
-        }
-      });
-    } catch (e) {}
-
-    // Detect dimension outliers — find majority size, flag others as suspect
-    var majorityDim = null;
-    var majorityCount = 0;
-    Object.keys(dimCounts).forEach(function (k) {
-      if (dimCounts[k] > majorityCount) { majorityCount = dimCounts[k]; majorityDim = k; }
-    });
-
-    var dimSuspectCount = 0;
-    if (majorityDim && Object.keys(dimCounts).length > 1) {
-      Object.keys(pageDims).forEach(function (pnStr) {
-        var ppn = parseInt(pnStr, 10);
-        var dk = pageDims[ppn].w + 'x' + pageDims[ppn].h;
-        if (dk !== majorityDim && !confirmedPages[ppn]) {
-          var dtile = $('pageGrid').querySelector('[data-page="' + ppn + '"]');
-          if (dtile && !dtile.classList.contains('suspect')) {
-            dtile.classList.remove('captured');
-            dtile.classList.add('suspect');
-            dtile.title = ppn + '페이지 (크기 불일치: ' + pageDims[ppn].w + 'x' + pageDims[ppn].h + ')';
-            if (suspectPages.indexOf(ppn) === -1) { suspectPages.push(ppn); dimSuspectCount++; }
-          }
-        }
-      });
-    }
-
-    hideProgress();
-    _inspectionRunning = false;
-    if (!gridLoadAbort) {
-      saveInspection(suspectPages, thumbs, captured);
-      inspectionData = { count: captured.length, pageSet: captured.slice(), suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
-      updateFilterCounts();
-      refreshDetailHeader();
-      renderMissingRanges();
-      var msgs = [];
-      if (newSuspect > 0) msgs.push(newSuspect + '개 빈 페이지');
-      if (dimSuspectCount > 0) msgs.push(dimSuspectCount + '개 크기 불일치');
-      if (msgs.length > 0) showToast(msgs.join(', ') + ' 의심 감지됨');
-    }
-  }
-
-  function applyStoredInspection(stored) {
-    var grid = $('pageGrid');
-    // Apply thumbnails
-    if (stored.thumbs) {
-      Object.keys(stored.thumbs).forEach(function (pn) {
-        var tile = grid.querySelector('[data-page="' + pn + '"]');
-        if (!tile || tile.dataset.loaded === 'true') return;
-        thumbCache[pn] = stored.thumbs[pn];
-        var img = document.createElement('img');
-        img.className = 'tile-thumb';
-        img.src = stored.thumbs[pn];
-        tile.insertBefore(img, tile.firstChild);
-        tile.dataset.loaded = 'true';
-      });
-    }
-    // Apply suspect status
-    if (stored.suspectPages) {
-      stored.suspectPages.forEach(function (pn) {
-        if (confirmedPages[pn]) return;
-        var tile = grid.querySelector('[data-page="' + pn + '"]');
-        if (tile) {
-          tile.classList.remove('captured');
-          tile.classList.add('suspect');
-          tile.title = pn + '페이지 (빈 페이지 의심)';
-        }
-      });
-    }
-  }
-
-  function createThumbnail(dataURL, maxW) {
-    return new Promise(function (resolve) {
-      var img = new Image();
-      img.onload = function () {
-        var scale = Math.min(maxW / img.width, 1);
-        var c = document.createElement('canvas');
-        c.width = Math.round(img.width * scale);
-        c.height = Math.round(img.height * scale);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        resolve(c.toDataURL('image/jpeg', 0.5));
-      };
-      img.onerror = function () { resolve(dataURL); };
-      img.src = dataURL;
-    });
-  }
-
-  // Blank detection settings (loaded from chrome.storage)
-  var blankSettings = { threshold: 245, ratio: 0.98 };
-
-  function loadBlankSettings() {
-    chrome.storage.local.get({ blankThreshold: 245, blankRatio: 98 }, function (d) {
-      blankSettings.threshold = d.blankThreshold;
-      blankSettings.ratio = d.blankRatio / 100;
-    });
-  }
-  loadBlankSettings();
-
-  // Auto re-inspect when blank detection settings change
-  chrome.storage.onChanged.addListener(function (changes) {
-    if (changes.blankThreshold || changes.blankRatio) {
-      loadBlankSettings();
-      if (selectedBookId) {
-        forceFullInspection();
-      }
-    }
-  });
-
-  function forceFullInspection() {
-    clearInspection();
-    renderDetail();
-    showToast('검사 기준 변경됨 - 전체 재검사 중...');
-  }
-
-  function checkBlankFromData(dataURL) {
-    return new Promise(function (resolve) {
-      var img = new Image();
-      img.onload = function () {
-        try {
-          var c = document.createElement('canvas');
-          var size = 32;
-          c.width = size; c.height = size;
-          c.getContext('2d').drawImage(img, 0, 0, size, size);
-          var data = c.getContext('2d').getImageData(0, 0, size, size).data;
-          var thr = blankSettings.threshold;
-          var whiteCount = 0;
-          for (var i = 0; i < data.length; i += 4) {
-            if (data[i] > thr && data[i + 1] > thr && data[i + 2] > thr) whiteCount++;
-          }
-          resolve(whiteCount / (size * size) > blankSettings.ratio);
-        } catch (e) { resolve(false); }
-      };
-      img.onerror = function () { resolve(false); };
-      img.src = dataURL;
-    });
-  }
-
-  // ── Preview modal ──
-  // Get the active filter from grid filter buttons
-  function getActiveFilter() {
-    var active = document.querySelector('.grid-filter.active');
-    return active ? active.dataset.filter : 'all';
-  }
-
-  // Get page numbers matching the current filter
-  function getFilteredPages() {
-    var filter = getActiveFilter();
-    if (filter === 'all') return capturedPageNums.slice();
-    var grid = $('pageGrid');
-    var result = [];
-    grid.querySelectorAll('.page-tile.' + filter).forEach(function (tile) {
-      result.push(parseInt(tile.dataset.page, 10));
-    });
-    return result.sort(function (a, b) { return a - b; });
-  }
-
-  async function openPreview(pageNum) {
-    if (!selectedBookId) return;
-
-    previewPageNum = pageNum;
-    $('previewModal').hidden = false;
-    $('previewImg').src = '';
-    $('modalTitle').textContent = pageNum + '페이지';
-    $('modalInfo').textContent = '로딩 중...';
-    updateNavButtons();
-    updatePreviewButtons();
-
-    try {
-      var page = await extGetPage(selectedBookId, pageNum);
-      if (page && page.dataURL) {
-        $('previewImg').src = page.dataURL;
-        $('modalInfo').textContent = pageNum + '페이지 · ' + (page.width || '?') + ' x ' + (page.height || '?') + 'px';
-      } else {
-        $('previewImg').src = '';
-        $('modalInfo').textContent = '이미지 데이터 없음';
-      }
-    } catch (e) {
-      $('modalInfo').textContent = '로딩 실패';
-      showError('페이지 로딩 실패', previewPageNum + '페이지를 불러올 수 없습니다.', formatErrorDetail(e));
-    }
-  }
-
-  function closePreview() {
-    $('previewModal').hidden = true;
-    $('previewImg').src = '';
-  }
-
-  function updateNavButtons() {
-    var filtered = getFilteredPages();
-    var idx = filtered.indexOf(previewPageNum);
-    $('prevPage').disabled = (idx <= 0);
-    $('nextPage').disabled = (idx < 0 || idx >= filtered.length - 1);
-  }
-
-  function updatePreviewButtons() {
-    var tile = $('pageGrid').querySelector('[data-page="' + previewPageNum + '"]');
-    var isSuspect = tile && tile.classList.contains('suspect');
-    var isFailed = tile && tile.classList.contains('failed');
-    var needsAction = isSuspect || isFailed || (tile && !tile.classList.contains('captured'));
-    $('markNormalBtn').disabled = !needsAction;
-    $('markNormalBtn').textContent = needsAction ? '정상 확인' : '정상 확인됨';
-  }
-
-  function navigatePreview(direction) {
-    var filtered = getFilteredPages();
-    var idx = filtered.indexOf(previewPageNum);
-    if (idx < 0) {
-      // Current page not in filter — find nearest
-      for (var i = 0; i < filtered.length; i++) {
-        if (filtered[i] > previewPageNum) { idx = direction > 0 ? i : i - 1; break; }
-      }
-      if (idx < 0) idx = filtered.length - 1;
-    } else {
-      idx += direction;
-    }
-    if (idx >= 0 && idx < filtered.length) {
-      openPreview(filtered[idx]);
-    }
-  }
-
-  // ── Delete page ──
-  async function deletePage(pageNum) {
-    if (!selectedBookId || !pageNum) return;
-
-    try {
-      // Find next page in current filter BEFORE deleting
-      var filtered = getFilteredPages();
-      var idx = filtered.indexOf(pageNum);
-      var nextInFilter = null;
-      if (idx >= 0 && idx + 1 < filtered.length) nextInFilter = filtered[idx + 1];
-      else if (idx > 0) nextInFilter = filtered[idx - 1];
-
-      // Delete (no confirm — fast workflow)
-      await extDeletePage(selectedBookId, pageNum);
-      capturedPageNums = capturedPageNums.filter(function (n) { return n !== pageNum; });
-      delete thumbCache[pageNum];
-      updateInspectionAfterDelete([pageNum]);
-
-      // Update tile immediately without full re-render
-      var tile = $('pageGrid').querySelector('[data-page="' + pageNum + '"]');
-      if (tile) {
-        tile.className = 'page-tile missing';
-        tile.dataset.loaded = 'false';
-        var thumb = tile.querySelector('.tile-thumb');
-        if (thumb) thumb.remove();
-        tile.title = pageNum + '페이지 (누락)';
-      }
-
-      // Jump to next page in filter instantly
-      if (nextInFilter) {
-        openPreview(nextInFilter);
-      } else {
-        closePreview();
-      }
-
-      // Update counters in background
-      var totalPages = (selectedBook && selectedBook.totalPages) || 0;
-      if (totalPages > 0) {
-        var pct = Math.round(capturedPageNums.length / totalPages * 100);
-        $('detailFill').style.width = pct + '%';
-        $('detailProgress').textContent = pct + '%';
-        $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
-      }
-      loadBooks().then(renderBookList);
-    } catch (e) {
-      showError('페이지 삭제 실패', pageNum + '페이지를 삭제하는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── Delete book ──
-  async function deleteBook() {
-    if (!selectedBookId) return;
-    var title = selectedBook ? selectedBook.title : selectedBookId;
-
-    if (!confirm('"' + title + '" 도서의 모든 캐시 데이터를 삭제하시겠습니까?')) return;
-
-    try {
-      await extDeleteBook(selectedBookId);
-      showToast('"' + title + '" 삭제됨');
-      selectedBookId = null;
-      selectedBook = null;
-      $('bookDetail').hidden = true;
-      $('emptyState').hidden = false;
-      await loadBooks();
-    } catch (e) {
-      showError('도서 삭제 실패', '"' + title + '" 도서를 삭제하는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── Viewer Live Connection ──
-
-  var viewerTabId = null;
-  var lastPageGridUpdate = 0;
-
-  function renderScanControls() {
-    // Initial check - polling handles the rest
-  }
-
-  // Always-on polling: runs entire time session manager is open
-  function startLivePolling() {
-    if (scanPollInterval) return;
-    updateViewerStatus();
-    scanPollInterval = setInterval(function () {
-      updateViewerStatus();
-      refreshPageDataIfNeeded();
-    }, 2000);
-  }
-
-  function updateViewerStatus() {
-    chrome.tabs.query({ url: 'https://wviewer.kyobobook.co.kr/*' }, function (tabs) {
-      var hasViewer = tabs && tabs.length > 0;
-      var prevTabId = viewerTabId;
-      viewerTabId = hasViewer ? tabs[0].id : null;
-
-      // Show/hide buttons
-      $('switchToViewerBtn').hidden = !viewerTabId;
-      $('openViewerBtn').hidden = !!viewerTabId;
-
-      if (!hasViewer) {
-        if (isScanning) {
-          isScanning = false;
-          refreshBookData();
-        }
-        setScanUI('disconnected', '뷰어 연결 안 됨');
-        return;
-      }
-
-      // New viewer appeared - fetch book info and auto-select
-      if (!prevTabId && viewerTabId) {
-        syncViewerBook(tabs[0].id);
-      }
-
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'ping' }, function (r) {
-        if (chrome.runtime.lastError || !r) {
-          setScanUI('disconnected', '뷰어 응답 없음');
-          return;
-        }
-        var wasScanning = isScanning;
-        isScanning = !!r.isCapturing;
-
-        if (isScanning) {
-          setScanUI('active', '스캔 진행 중 - 뷰어에서 제어하세요');
-        } else if (wasScanning) {
-          setScanUI('connected', '뷰어 연결됨');
-          refreshBookData();
-        } else {
-          setScanUI('connected', '뷰어 연결됨');
-        }
-      });
-    });
-  }
-
-  // Viewer connected: get book info + TOC → auto-select in session manager
-  function syncViewerBook(tabId) {
-    chrome.tabs.sendMessage(tabId, { action: 'getPageInfo' }, function (r) {
-      if (chrome.runtime.lastError || !r || !r.success || !r.data) return;
-      var title = r.data.title;
-      var total = r.data.total;
-      if (!title) return;
-
-      var bookId = 'title:' + title;
-
-      // Also fetch TOC from the viewer immediately
-      chrome.tabs.sendMessage(tabId, { action: 'getTOC' }, function (tocR) {
-        void chrome.runtime.lastError;
-        var liveToc = (tocR && tocR.success && tocR.data) ? tocR.data : [];
-
-        loadBooks().then(function () {
-          var found = null;
-          for (var i = 0; i < books.length; i++) {
-            if (books[i].title === title) { found = books[i]; break; }
-          }
-
-          if (found) {
-            // Update TOC if viewer has a better one
-            if (liveToc.length > 0 && (!found.toc || found.toc.length === 0 || liveToc.length > found.toc.length)) {
-              found.toc = liveToc;
-              extStoreBookMeta(found.bookId, found.title, found.totalPages, liveToc).catch(function () {});
-            }
-            selectBook(found.bookId);
-          } else {
-            selectedBookId = bookId;
-            selectedBook = { bookId: bookId, title: title, totalPages: total || 0, toc: liveToc, cachedCount: 0 };
-            capturedPageNums = [];
-            // Save metadata with TOC
-            if (liveToc.length > 0) {
-              extStoreBookMeta(bookId, title, total || 0, liveToc).catch(function () {});
-            }
-            $('emptyState').hidden = true;
-            $('bookDetail').hidden = false;
-            renderBookList();
-            renderDetail();
-          }
-        });
-      });
-    });
-  }
-
-  function setScanUI(state, statusText) {
-    var dot = $('scanDot');
-    var text = $('scanStatusText');
-    var isConnected = state === 'connected' || state === 'active' || state === 'recovering';
-
-    if (state === 'recovering' || state === 'active') {
-      dot.className = 'scan-dot active';
-      text.textContent = statusText;
-      $('scanCard').hidden = false;
-    } else if (state === 'connected') {
-      dot.className = 'scan-dot complete';
-      text.textContent = statusText;
-      $('scanCard').hidden = true;
-    } else {
-      dot.className = 'scan-dot idle';
-      text.textContent = statusText;
-      $('scanCard').hidden = true;
-    }
-
-    // Disable viewer-dependent buttons when disconnected
-    $('rescanAllBtn').disabled = !isConnected;
-    // Rescan buttons in ranges
-    var rescanBtns = document.querySelectorAll('.range-rescan');
-    rescanBtns.forEach(function (btn) { btn.disabled = !isConnected; });
-  }
-
-  // Incremental page grid update: flip a single tile without full re-render
-  function markPageCaptured(pageNum) {
-    if (capturedPageNums.indexOf(pageNum) !== -1) return;
-    capturedPageNums.push(pageNum);
-    capturedPageNums.sort(function (a, b) { return a - b; });
-
-    var grid = $('pageGrid');
-    var tile = grid.querySelector('[data-page="' + pageNum + '"]');
-    if (tile) {
-      tile.className = 'page-tile captured';
-      tile.dataset.loaded = 'false';
-      tile.title = pageNum + '페이지';
-      tile.addEventListener('click', function (e) {
-        if (e.target.classList.contains('tile-check')) return;
-        openPreview(parseInt(this.dataset.page, 10));
-      });
-    }
-
-    // Update counters
-    var totalPages = (selectedBook && selectedBook.totalPages) || 0;
-    if (totalPages > 0) {
-      var pct = Math.round(capturedPageNums.length / totalPages * 100);
-      $('detailFill').style.width = pct + '%';
-      $('detailProgress').textContent = pct + '%';
-      $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
-    }
-  }
-
-  // Mark specific pages as failed (red) in the grid
-  function markPagesFailed(failedPages) {
-    var grid = $('pageGrid');
-    if (!grid) return;
-    for (var i = 0; i < failedPages.length; i++) {
-      var tile = grid.querySelector('[data-page="' + failedPages[i] + '"]');
-      if (tile) {
-        tile.className = 'page-tile failed';
-        tile.title = failedPages[i] + '페이지 (캡처 실패)';
-      }
-    }
-  }
+  };
 
   // ── Missing ranges ──
-  function renderMissingRanges() {
-    var totalPages = (selectedBook && selectedBook.totalPages) || 0;
+  S.renderMissingRanges = function () {
+    var totalPages = (S.selectedBook && S.selectedBook.totalPages) || 0;
     var section = $('missingSection');
-    if (totalPages === 0) { section.hidden = true; updateTocMissingRow(); return; }
+    if (totalPages === 0) { section.hidden = true; S.updateTocMissingRow(); return; }
 
     var capturedSet = {};
-    capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
+    S.capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
 
-    // Find contiguous missing ranges
     var ranges = [];
     var rangeStart = 0;
     for (var p = 1; p <= totalPages; p++) {
@@ -1105,8 +452,7 @@
     }
     if (rangeStart > 0) ranges.push({ start: rangeStart, end: totalPages });
 
-    // Find contiguous suspect ranges
-    var suspectPages = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages : [];
+    var suspectPages = S.inspectionData && S.inspectionData.suspectPages ? S.inspectionData.suspectPages : [];
     var suspectSet = {};
     suspectPages.forEach(function (n) { suspectSet[n] = true; });
 
@@ -1129,14 +475,13 @@
     var hasMissing = ranges.length > 0;
     var hasSuspect = suspectRanges.length > 0;
 
-    if (!hasMissing && !hasSuspect) { section.hidden = true; updateTocMissingRow(); return; }
+    if (!hasMissing && !hasSuspect) { section.hidden = true; S.updateTocMissingRow(); return; }
 
     section.hidden = false;
-    updateTocMissingRow();
+    S.updateTocMissingRow();
 
     var html = '';
 
-    // Missing ranges
     if (hasMissing) {
       var totalMissing = 0;
       ranges.forEach(function (r) { totalMissing += r.end - r.start + 1; });
@@ -1156,7 +501,6 @@
       html += '</div></div>';
     }
 
-    // Suspect ranges — collect reasons from tile titles
     if (hasSuspect) {
       html += '<div class="range-group">';
       html += '<div class="range-section-label suspect-label">의심 ' + suspectPages.length + '페이지 · ' + suspectRanges.length + '구간</div>';
@@ -1165,7 +509,6 @@
         var sr = suspectRanges[j];
         var scount = sr.end - sr.start + 1;
         var slabel = sr.start === sr.end ? sr.start + 'p' : sr.start + '-' + sr.end + 'p';
-        // Collect reasons from grid tiles
         var reasons = [];
         for (var rp = sr.start; rp <= sr.end; rp++) {
           var rtile = $('pageGrid') ? $('pageGrid').querySelector('[data-page="' + rp + '"]') : null;
@@ -1187,558 +530,20 @@
     $('missingLabel').innerHTML = '<strong>누락 · 의심 구간</strong>';
     $('missingRanges').innerHTML = html;
 
-    // Bind rescan buttons
     $('missingRanges').querySelectorAll('.range-rescan').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var start = parseInt(this.dataset.start, 10);
         var end = parseInt(this.dataset.end, 10);
-        rescanRange(start, end);
+        S.rescanRange(start, end);
       });
     });
+  };
+
+  function renderScanControls() {
+    // Initial check - polling handles the rest
   }
 
-  function rescanRange(startPage, endPage) {
-    if (!viewerTabId) {
-      showToast('뷰어가 연결되어야 재스캔 가능합니다');
-      return;
-    }
-    // Load user settings for capture delay
-    chrome.storage.local.get({
-      pageDelayMin: 800, pageDelayMax: 1500
-    }, function (settings) {
-      chrome.tabs.sendMessage(viewerTabId, {
-        action: 'startCapture',
-        options: {
-          startPage: startPage, endPage: endPage,
-          mode: 'normal', autoRetry: false, captureDelay: 500,
-          pageDelayMin: settings.pageDelayMin, pageDelayMax: settings.pageDelayMax,
-          resume: true
-        }
-      }, function (r) {
-        void chrome.runtime.lastError;
-        if (r && r.success) {
-          showToast(startPage + '-' + endPage + 'p 재스캔 시작');
-          chrome.tabs.update(viewerTabId, { active: true });
-        } else {
-          showToast('재스캔 시작 실패');
-        }
-      });
-    });
-  }
-
-  // ── Batch delete ──
-  function updateBatchBtn() {
-    var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
-    var count = checked.length;
-    if (count === 0) {
-      $('batchConfirmBtn').hidden = true;
-      $('batchDeleteBtn').hidden = true;
-      return;
-    }
-
-    // Analyze what's selected
-    var hasCaptured = false, hasSuspect = false;
-    checked.forEach(function (cb) {
-      var tile = cb.parentElement;
-      if (tile.classList.contains('suspect') || tile.classList.contains('failed')) hasSuspect = true;
-      if (tile.classList.contains('captured')) hasCaptured = true;
-    });
-
-    // suspect/failed selected → show "정상 확인" + "삭제"
-    // captured selected → show "삭제" only
-    // missing/failed → nothing useful (can't delete what's not there)
-    $('batchConfirmBtn').hidden = !hasSuspect;
-    $('batchDeleteBtn').hidden = !(hasCaptured || hasSuspect);
-    $('batchConfirmBtn').textContent = count + '개 정상 확인';
-    $('batchDeleteBtn').textContent = count + '개 삭제';
-  }
-
-  async function batchDeletePages(pageNums) {
-    for (var i = 0; i < pageNums.length; i++) {
-      try { await extDeletePage(selectedBookId, pageNums[i]); } catch (e) {}
-      // Remove from thumb cache and inspection
-      delete thumbCache[pageNums[i]];
-    }
-    capturedPageNums = capturedPageNums.filter(function (n) { return pageNums.indexOf(n) === -1; });
-    // Update stored inspection count to match (avoid re-inspection)
-    updateInspectionAfterDelete(pageNums);
-    showToast(pageNums.length + '개 페이지 삭제됨');
-    renderDetail();
-    await loadBooks();
-    renderBookList();
-  }
-
-  function updateInspectionAfterDelete(deletedPages) {
-    var key = getInspectionKey();
-    chrome.storage.local.get(key, function (d) {
-      var stored = d[key];
-      if (!stored) return;
-      // Remove deleted pages from inspection data
-      var delSet = {};
-      deletedPages.forEach(function (p) { delSet[p] = true; });
-      stored.count = capturedPageNums.length;
-      stored.suspectPages = (stored.suspectPages || []).filter(function (p) { return !delSet[p]; });
-      if (stored.thumbs) {
-        deletedPages.forEach(function (p) { delete stored.thumbs[p]; });
-      }
-      var obj = {};
-      obj[key] = stored;
-      chrome.storage.local.set(obj);
-    });
-  }
-
-  // ── Manual page status override (persisted) ──
-  var confirmedPages = {}; // pageNum → true (persisted in chrome.storage)
-
-  function loadConfirmedPages() {
-    if (!selectedBookId) return;
-    var key = 'confirmed_' + selectedBookId;
-    chrome.storage.local.get(key, function (d) {
-      var arr = d[key] || [];
-      confirmedPages = {};
-      arr.forEach(function (p) { confirmedPages[p] = true; });
-    });
-  }
-
-  function saveConfirmedPages() {
-    if (!selectedBookId) return;
-    var key = 'confirmed_' + selectedBookId;
-    var obj = {};
-    obj[key] = Object.keys(confirmedPages).map(Number);
-    chrome.storage.local.set(obj);
-  }
-
-  function setPageStatus(pageNum, status) {
-    var grid = $('pageGrid');
-    var tile = grid.querySelector('[data-page="' + pageNum + '"]');
-    if (tile) {
-      tile.classList.remove('captured', 'suspect', 'failed');
-      tile.classList.add(status);
-      tile.title = pageNum + '페이지';
-    }
-    if (status === 'captured') {
-      confirmedPages[pageNum] = true;
-      saveConfirmedPages();
-    }
-    showToast(pageNum + 'p → 정상 확인');
-  }
-
-  // Periodic DB refresh for page data (catches any missed real-time updates)
-  function refreshPageDataIfNeeded() {
-    if (!selectedBookId) return;
-    var now = Date.now();
-    if (now - lastPageGridUpdate < 5000) return; // Max once per 5s
-    lastPageGridUpdate = now;
-
-    extGetPagesInfo(selectedBookId).then(function (pagesInfo) {
-      var newNums = pagesInfo.map(function (p) { return p.pageNum; }).sort(function (a, b) { return a - b; });
-      if (newNums.length !== capturedPageNums.length) {
-        capturedPageNums = newNums;
-        renderDetail();
-        loadBooks().then(renderBookList);
-      }
-    }).catch(function () {});
-  }
-
-  function switchToViewer() {
-    if (viewerTabId) {
-      chrome.tabs.update(viewerTabId, { active: true });
-    }
-  }
-
-  function openViewer() {
-    if (!selectedBook || !selectedBook.title) {
-      showToast('도서관 페이지에서 바로보기로 뷰어를 열어주세요');
-      return;
-    }
-    chrome.runtime.sendMessage({
-      target: 'background', action: 'startCaptureForBook',
-      bookTitle: selectedBook.title, resume: false
-    }, function () { void chrome.runtime.lastError; });
-    showToast('뷰어 여는 중...');
-  }
-
-  async function refreshBookData() {
-    if (!selectedBookId) return;
-    try {
-      selectedBook = await extGetBookMeta(selectedBookId);
-      var pagesInfo = await extGetPagesInfo(selectedBookId);
-      capturedPageNums = pagesInfo.map(function (p) { return p.pageNum; }).sort(function (a, b) { return a - b; });
-    } catch (e) {}
-    if (!selectedBook) selectedBook = findBookInList(selectedBookId);
-    renderDetail();
-    await loadBooks();
-    renderBookList();
-  }
-
-  function setupScanListeners() {
-    // Viewer buttons
-    $('switchToViewerBtn').addEventListener('click', switchToViewer);
-    $('openViewerBtn').addEventListener('click', openViewer);
-
-    // Start always-on polling
-    startLivePolling();
-
-    // Instant detection when viewer tab is closed
-    chrome.tabs.onRemoved.addListener(function (tabId) {
-      if (tabId === viewerTabId) {
-        viewerTabId = null;
-        isScanning = false;
-        $('switchToViewerBtn').hidden = true;
-        $('openViewerBtn').hidden = false;
-        setScanUI('disconnected', '뷰어 연결 안 됨');
-        refreshBookData();
-      }
-    });
-
-    // Listen for real-time messages from content.js
-    chrome.runtime.onMessage.addListener(function (msg) {
-      if (!msg || msg.source !== 'KYOBO_CONTENT') return;
-
-      switch (msg.type) {
-        case 'bookMetaCached':
-          loadBooks().then(function () {
-            if (msg.data && msg.data.bookId && !selectedBookId) {
-              selectBook(msg.data.bookId);
-            } else if (msg.data && msg.data.bookId && selectedBookId === msg.data.bookId) {
-              refreshBookData();
-            }
-          });
-          break;
-
-        case 'captureStarted':
-          isScanning = true;
-          setScanUI('active', '스캔 진행 중 - 뷰어에서 제어하세요');
-          break;
-
-        case 'captureProgress':
-          if (msg.data) {
-            isScanning = true;
-            // Use scan-range progress if partial, otherwise overall
-            var hasScanRange = msg.data.scanTotal > 0 && msg.data.scanTotal < msg.data.total;
-            var dispCur = hasScanRange ? msg.data.scanCurrent : msg.data.current;
-            var dispTot = hasScanRange ? msg.data.scanTotal : msg.data.total;
-            var pct = dispTot > 0 ? Math.round(dispCur / dispTot * 100) : 0;
-            $('scanFill').style.width = pct + '%';
-            $('scanLiveText').textContent = dispCur + '/' + dispTot + ' (' + pct + '%)' +
-              (msg.data.message ? ' - ' + msg.data.message : '');
-            setScanUI('active', hasScanRange ? '재스캔 진행 중' : '스캔 진행 중');
-
-            // Incrementally update page grid tile
-            if (msg.data.page && msg.data.message && msg.data.message.indexOf('캡처 완료') !== -1) {
-              markPageCaptured(msg.data.page);
-            }
-          }
-          break;
-
-        case 'autoRetrying':
-          isScanning = true;
-          setScanUI('recovering', '비정상 접근 감지 - 자동 복구 중...');
-          $('scanLiveInfo').hidden = false;
-          $('scanLiveText').textContent = '뷰어를 다시 여는 중... (자동 재시도)';
-          showToast('비정상 접근 감지 - 자동 복구 시도 중');
-          break;
-
-        case 'captureComplete':
-          isScanning = false;
-          clearInspection(); // new scan → re-inspect
-          refreshBookData().then(function () {
-            // Highlight failed pages in red
-            if (msg.data && msg.data.missingPages && msg.data.missingPages.length > 0) {
-              markPagesFailed(msg.data.missingPages);
-            }
-          });
-          if (msg.data && msg.data.missing > 0) {
-            showToast('스캔 완료 - ' + msg.data.missing + '개 페이지 누락');
-          } else {
-            showToast('스캔 완료!');
-          }
-          break;
-
-        case 'passiveCapture':
-          if (msg.data && msg.data.page && msg.data.bookId === selectedBookId) {
-            markPageCaptured(msg.data.page);
-            // Update sidebar counts
-            loadBooks().then(function () { renderBookList(); });
-          }
-          break;
-
-        case 'captureStopped':
-          isScanning = false;
-          refreshBookData();
-          break;
-
-        case 'captureError':
-          isScanning = false;
-          refreshBookData();
-          if (msg.data) {
-            setScanUI('error', '스캔 실패: ' + (msg.data.message || ''));
-            showToast('스캔 오류: ' + (msg.data.message || ''));
-          }
-          break;
-      }
-    });
-  }
-
-  // ── PDF Download ──
-  async function downloadPDF() {
-    if (!selectedBookId || !selectedBook) return;
-    if (typeof window.jspdf === 'undefined') {
-      showError('라이브러리 로드 실패', 'jsPDF 라이브러리를 찾을 수 없습니다.', 'lib/jspdf.umd.min.js 파일이 존재하는지 확인하세요.');
-      return;
-    }
-
-    var totalPages = selectedBook.totalPages || 0;
-    var title = selectedBook.title || 'ebook';
-    var toc = selectedBook.toc || [];
-    var sizeVal = $('pdfSize').value;
-    var SIZE_PRESETS = {
-      original: null,
-      a4: { w: 210, h: 297 },
-      b5: { w: 182, h: 257 },
-      a5: { w: 148, h: 210 }
-    };
-    var target = SIZE_PRESETS[sizeVal] || null;
-
-    // Pre-sort TOC by page and build parent map for depth nesting
-    var tocByPage = {};
-    if (toc && toc.length > 0) {
-      toc.forEach(function (t) {
-        if (!tocByPage[t.page]) tocByPage[t.page] = [];
-        tocByPage[t.page].push(t);
-      });
-    }
-    var outlineParents = {}; // depth -> last outline node at that depth
-
-    showProgress('PDF 생성 중...', 0);
-    var sorted = capturedPageNums.slice().sort(function (a, b) { return a - b; });
-
-    try {
-      var firstPage = await extGetPage(selectedBookId, sorted[0]);
-      if (!firstPage || !firstPage.dataURL) throw new Error('첫 페이지 로드 실패');
-
-      var firstDims = await getImageDimensions(firstPage.dataURL);
-      var pageOpts = calcPageDimensions(firstDims.width, firstDims.height, target);
-
-      var jsPDF = window.jspdf.jsPDF;
-      var pdf = new jsPDF({
-        orientation: pageOpts.orientation,
-        unit: 'mm',
-        format: [pageOpts.pageW, pageOpts.pageH]
-      });
-
-      for (var i = 0; i < sorted.length; i++) {
-        var pn = sorted[i];
-        updateProgress(Math.round((i / sorted.length) * 100), pn + '페이지 처리 중...');
-
-        var page = (i === 0) ? firstPage : await extGetPage(selectedBookId, pn);
-        if (!page || !page.dataURL) continue;
-
-        var imgDims = await getImageDimensions(page.dataURL);
-        var curPageOpts = calcPageDimensions(imgDims.width, imgDims.height, target);
-
-        if (i > 0) {
-          pdf.addPage([curPageOpts.pageW, curPageOpts.pageH], curPageOpts.orientation);
-        }
-
-        var layout = calcImageLayout(imgDims.width, imgDims.height, curPageOpts.pageW, curPageOpts.pageH, target);
-        var jpegURL = await toJpegDataURL(page.dataURL, 1.0);
-        pdf.addImage(jpegURL, 'JPEG', layout.x, layout.y, layout.w, layout.h);
-
-        // Add TOC bookmarks with proper depth nesting
-        if (tocByPage[pn]) {
-          tocByPage[pn].forEach(function (entry) {
-            try {
-              var depth = entry.depth || 1;
-              var parent = depth > 1 ? (outlineParents[depth - 1] || null) : null;
-              var node = pdf.outline.add(parent, entry.title || ('Page ' + pn), { pageNumber: i + 1 });
-              outlineParents[depth] = node;
-              // Clear deeper levels when a new node at this depth is added
-              for (var d = depth + 1; d <= 10; d++) delete outlineParents[d];
-            } catch (e) {}
-          });
-        }
-      }
-
-      updateProgress(100, '파일 저장 중...');
-      var sizeSuffix = sizeVal && sizeVal !== 'original' ? '_' + sizeVal.toUpperCase() : '';
-      pdf.save(sanitizeFilename(title) + sizeSuffix + '.pdf');
-      hideProgress();
-      showToast('PDF 저장 완료!');
-    } catch (e) {
-      showError('PDF 생성 실패', 'PDF 파일을 생성하는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── ZIP Download ──
-  async function downloadZIP() {
-    if (!selectedBookId || !selectedBook) return;
-    if (typeof JSZip === 'undefined') {
-      showError('라이브러리 로드 실패', 'JSZip 라이브러리를 찾을 수 없습니다.', 'lib/jszip.min.js 파일이 존재하는지 확인하세요.');
-      return;
-    }
-
-    var title = selectedBook.title || 'ebook';
-    showProgress('ZIP 생성 중...', 0);
-    var sorted = capturedPageNums.slice().sort(function (a, b) { return a - b; });
-
-    try {
-      var zip = new JSZip();
-      var imgFolder = zip.folder('images');
-
-      for (var i = 0; i < sorted.length; i++) {
-        var pn = sorted[i];
-        updateProgress(Math.round((i / sorted.length) * 100), pn + '페이지 추가 중...');
-
-        var page = await extGetPage(selectedBookId, pn);
-        if (!page || !page.dataURL) continue;
-
-        var base64 = page.dataURL.split(',')[1];
-        var ext = page.dataURL.indexOf('image/png') !== -1 ? '.png' : '.jpg';
-        var padNum = String(pn).padStart(4, '0');
-        imgFolder.file(padNum + ext, base64, { base64: true });
-      }
-
-      updateProgress(95, 'ZIP 압축 중...');
-      var blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
-      downloadBlob(blob, sanitizeFilename(title) + '_images.zip');
-      hideProgress();
-      showToast('ZIP 저장 완료!');
-    } catch (e) {
-      showError('ZIP 생성 실패', 'ZIP 파일을 생성하는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── Export session (ZIP with metadata + images) ──
-  async function exportSession() {
-    if (!selectedBookId || !selectedBook) return;
-    if (typeof JSZip === 'undefined') {
-      showError('라이브러리 로드 실패', 'JSZip 라이브러리를 찾을 수 없습니다.', 'lib/jszip.min.js 파일이 존재하는지 확인하세요.');
-      return;
-    }
-
-    var title = selectedBook.title || 'ebook';
-    showProgress('세션 내보내기 중...', 0);
-    var sorted = capturedPageNums.slice().sort(function (a, b) { return a - b; });
-
-    try {
-      var zip = new JSZip();
-
-      var metadata = {
-        version: 1,
-        bookId: selectedBookId,
-        title: selectedBook.title,
-        totalPages: selectedBook.totalPages,
-        toc: selectedBook.toc || [],
-        capturedPages: sorted,
-        exportDate: new Date().toISOString()
-      };
-      zip.file('metadata.json', JSON.stringify(metadata, null, 2));
-
-      var pagesFolder = zip.folder('pages');
-      for (var i = 0; i < sorted.length; i++) {
-        var pn = sorted[i];
-        updateProgress(Math.round((i / sorted.length) * 90), pn + '페이지 내보내기 중...');
-
-        var page = await extGetPage(selectedBookId, pn);
-        if (!page || !page.dataURL) continue;
-
-        var pageInfo = {
-          pageNum: page.pageNum,
-          width: page.width,
-          height: page.height
-        };
-        var base64 = page.dataURL.split(',')[1];
-        var ext = page.dataURL.indexOf('image/png') !== -1 ? '.png' : '.jpg';
-        var padNum = String(pn).padStart(4, '0');
-        pagesFolder.file(padNum + ext, base64, { base64: true });
-        pagesFolder.file(padNum + '.json', JSON.stringify(pageInfo));
-      }
-
-      updateProgress(95, 'ZIP 압축 중...');
-      var blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
-      downloadBlob(blob, sanitizeFilename(title) + '_session.zip');
-      hideProgress();
-      showToast('세션 내보내기 완료!');
-    } catch (e) {
-      showError('세션 내보내기 실패', '세션 데이터를 내보내는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── Import session ──
-  async function importSession(file) {
-    if (!file) return;
-    if (typeof JSZip === 'undefined') {
-      showError('라이브러리 로드 실패', 'JSZip 라이브러리를 찾을 수 없습니다.', 'lib/jszip.min.js 파일이 존재하는지 확인하세요.');
-      return;
-    }
-
-    showProgress('세션 불러오기 중...', 0);
-
-    try {
-      var zip = await JSZip.loadAsync(file);
-      var metaFile = zip.file('metadata.json');
-      if (!metaFile) throw new Error('metadata.json 없음 - 유효한 세션 파일이 아닙니다');
-
-      var metaText = await metaFile.async('string');
-      var metadata = JSON.parse(metaText);
-      if (!metadata.bookId || typeof metadata.title !== 'string') throw new Error('유효하지 않은 메타데이터');
-      metadata.totalPages = (typeof metadata.totalPages === 'number') ? Math.max(0, Math.floor(metadata.totalPages)) : 0;
-      metadata.bookId = String(metadata.bookId);
-      metadata.title = String(metadata.title);
-
-      updateProgress(5, '메타데이터 저장 중...');
-      await extStoreBookMeta(metadata.bookId, metadata.title, metadata.totalPages, metadata.toc || []);
-
-      var pagesFolder = zip.folder('pages');
-      var imageFiles = [];
-      pagesFolder.forEach(function (relativePath, entry) {
-        if (relativePath.endsWith('.jpg') || relativePath.endsWith('.png')) {
-          imageFiles.push(entry);
-        }
-      });
-
-      for (var i = 0; i < imageFiles.length; i++) {
-        var entry = imageFiles[i];
-        var filename = entry.name.split('/').pop();
-        var pageNum = parseInt(filename.replace(/\.(jpg|png)$/, ''), 10);
-        updateProgress(5 + Math.round((i / imageFiles.length) * 90), pageNum + '페이지 복원 중...');
-
-        var imgData = await entry.async('base64');
-        var isPng = entry.name.endsWith('.png');
-        var dataURL = (isPng ? 'data:image/png;base64,' : 'data:image/jpeg;base64,') + imgData;
-
-        var width = 0, height = 0;
-        var infoFile = pagesFolder.file(String(pageNum).padStart(4, '0') + '.json');
-        if (infoFile) {
-          try {
-            var info = JSON.parse(await infoFile.async('string'));
-            width = info.width || 0;
-            height = info.height || 0;
-          } catch (e) {}
-        }
-
-        if (width === 0 || height === 0) {
-          try {
-            var dims = await getImageDimensions(dataURL);
-            width = dims.width;
-            height = dims.height;
-          } catch (e) {}
-        }
-
-        await extStorePage(metadata.bookId, pageNum, dataURL, width, height);
-      }
-
-      hideProgress();
-      showToast('"' + metadata.title + '" 불러오기 완료! (' + imageFiles.length + '페이지)');
-      await loadBooks();
-      selectBook(metadata.bookId);
-    } catch (e) {
-      showError('세션 불러오기 실패', '세션 파일을 복원하는 중 오류가 발생했습니다.', formatErrorDetail(e));
-    }
-  }
-
-  // ── Event Listeners ──
+  // ── Collapsible sections ──
   function setupCollapsible(toggleId, iconId, contentId) {
     var collapsed = false;
     $(toggleId).addEventListener('click', function (e) {
@@ -1750,224 +555,145 @@
     });
   }
 
-  // ── TOC Rescan ──
-  function tocRescan() {
-    if (viewerTabId) {
-      // Viewer already open — just fetch TOC
-      doTocFetch(viewerTabId);
-    } else if (selectedBook && selectedBook.title) {
-      // No viewer — open it first, then fetch
-      showToast('뷰어 여는 중...');
-      chrome.runtime.sendMessage({
-        target: 'background', action: 'startCaptureForBook',
-        bookTitle: selectedBook.title, resume: false
-      }, function () { void chrome.runtime.lastError; });
-      // Wait for viewer tab to appear, then fetch TOC
-      var checkCount = 0;
-      var waitForViewer = setInterval(function () {
-        checkCount++;
-        if (checkCount > 30) { clearInterval(waitForViewer); showToast('뷰어 열기 시간 초과'); return; }
-        chrome.tabs.query({ url: 'https://wviewer.kyobobook.co.kr/*' }, function (tabs) {
-          if (!tabs || tabs.length === 0) return;
-          clearInterval(waitForViewer);
-          viewerTabId = tabs[0].id;
-          // Wait for content script to be ready
-          setTimeout(function () { doTocFetch(viewerTabId); }, 5000);
-        });
-      }, 1000);
-    } else {
-      showToast('도서 정보가 없습니다');
-    }
-  }
+  // ── Scan listeners (chrome.runtime.onMessage dispatcher) ──
+  function setupScanListeners() {
+    $('switchToViewerBtn').addEventListener('click', S.switchToViewer);
+    $('openViewerBtn').addEventListener('click', S.openViewer);
 
-  function doTocFetch(tabId) {
-    showToast('목차 스캔 중...');
-    chrome.tabs.sendMessage(tabId, { action: 'getTOC' }, function (r) {
-      if (chrome.runtime.lastError || !r || !r.success) {
-        showToast('목차 재스캔 실패 — 뷰어가 아직 로딩 중일 수 있습니다');
-        return;
-      }
-      var newToc = r.data || [];
-      if (newToc.length === 0) {
-        showToast('뷰어에서 목차를 찾을 수 없습니다');
-        return;
-      }
-      if (selectedBook) {
-        selectedBook.toc = newToc;
-        extStoreBookMeta(selectedBookId, selectedBook.title, selectedBook.totalPages, newToc).then(function () {
-          renderTOC();
-          showToast('목차 재스캔 완료 (' + newToc.length + '항목)');
-        });
+    S.startLivePolling();
+
+    chrome.tabs.onRemoved.addListener(function (tabId) {
+      if (tabId === S.viewerTabId) {
+        S.viewerTabId = null;
+        S.isScanning = false;
+        $('switchToViewerBtn').hidden = true;
+        $('openViewerBtn').hidden = false;
+        S.setScanUI('disconnected', '뷰어 연결 안 됨');
+        S.refreshBookData();
       }
     });
-  }
 
-  // ── TOC Visual Editor ──
-  var editingToc = [];
+    chrome.runtime.onMessage.addListener(function (msg) {
+      if (!msg || msg.source !== 'KYOBO_CONTENT') return;
 
-  function openTocEditor() {
-    editingToc = JSON.parse(JSON.stringify((selectedBook && selectedBook.toc) || []));
-    renderTocEditor();
-    $('tocEditOverlay').hidden = false;
-    $('tocEditStatus').textContent = editingToc.length + '개 항목';
-  }
+      switch (msg.type) {
+        case 'bookMetaCached':
+          S.loadBooks().then(function () {
+            if (msg.data && msg.data.bookId && !S.selectedBookId) {
+              S.selectBook(msg.data.bookId);
+            } else if (msg.data && msg.data.bookId && S.selectedBookId === msg.data.bookId) {
+              S.refreshBookData();
+            }
+          });
+          break;
 
-  function closeTocEditor() {
-    $('tocEditOverlay').hidden = true;
-  }
+        case 'captureStarted':
+          S.isScanning = true;
+          S.setScanUI('active', '스캔 진행 중 - 뷰어에서 제어하세요');
+          break;
 
-  function renderTocEditor() {
-    var list = $('tocEditList');
-    var html = '';
+        case 'captureProgress':
+          if (msg.data) {
+            S.isScanning = true;
+            var hasScanRange = msg.data.scanTotal > 0 && msg.data.scanTotal < msg.data.total;
+            var dispCur = hasScanRange ? msg.data.scanCurrent : msg.data.current;
+            var dispTot = hasScanRange ? msg.data.scanTotal : msg.data.total;
+            var pct = dispTot > 0 ? Math.round(dispCur / dispTot * 100) : 0;
+            $('scanFill').style.width = pct + '%';
+            $('scanLiveText').textContent = dispCur + '/' + dispTot + ' (' + pct + '%)' +
+              (msg.data.message ? ' - ' + msg.data.message : '');
+            S.setScanUI('active', hasScanRange ? '재스캔 진행 중' : '스캔 진행 중');
 
-    // Determine max allowed depth per item (can't go deeper than prev item + 1)
-    for (var i = 0; i < editingToc.length; i++) {
-      var item = editingToc[i];
-      var depth = item.depth || 1;
-      var isFirst = (i === 0);
-      var prevDepth = isFirst ? 0 : (editingToc[i - 1].depth || 1);
-      var maxDepth = Math.min(prevDepth + 1, 5);
-      var canOutdent = depth > 1;
-      var canIndent = depth < maxDepth;
-
-      // Build tree connector: show hierarchy visually
-      var treeHtml = '';
-      for (var d = 1; d < depth; d++) {
-        // Check if there's a sibling at this depth level below
-        var hasSiblingBelow = false;
-        for (var j = i + 1; j < editingToc.length; j++) {
-          var jd = editingToc[j].depth || 1;
-          if (jd <= d) { hasSiblingBelow = (jd === d); break; }
-          if (jd === d + 1) { hasSiblingBelow = true; break; }
-        }
-        if (d === depth - 1) {
-          // Last connector: └ or ├
-          var isLastAtDepth = true;
-          for (var k = i + 1; k < editingToc.length; k++) {
-            var kd = editingToc[k].depth || 1;
-            if (kd < depth) break;
-            if (kd === depth) { isLastAtDepth = false; break; }
+            if (msg.data.page && msg.data.message && msg.data.message.indexOf('캡처 완료') !== -1) {
+              S.markPageCaptured(msg.data.page);
+            }
           }
-          treeHtml += '<span class="tree-char">' + (isLastAtDepth ? '└─' : '├─') + '</span>';
-        } else {
-          // Vertical line or empty
-          var hasLine = false;
-          for (var m = i + 1; m < editingToc.length; m++) {
-            var md = editingToc[m].depth || 1;
-            if (md <= d) { hasLine = (md === d); break; }
-            if (md > d) hasLine = true;
+          break;
+
+        case 'autoRetrying':
+          S.isScanning = true;
+          S.setScanUI('recovering', '비정상 접근 감지 - 자동 복구 중...');
+          $('scanLiveInfo').hidden = false;
+          $('scanLiveText').textContent = '뷰어를 다시 여는 중... (자동 재시도)';
+          S.showToast('비정상 접근 감지 - 자동 복구 시도 중');
+          break;
+
+        case 'captureComplete':
+          S.isScanning = false;
+          S.clearInspection();
+          S.refreshBookData().then(function () {
+            if (msg.data && msg.data.missingPages && msg.data.missingPages.length > 0) {
+              S.markPagesFailed(msg.data.missingPages);
+            }
+          });
+          if (msg.data && msg.data.missing > 0) {
+            S.showToast('스캔 완료 - ' + msg.data.missing + '개 페이지 누락');
+          } else {
+            S.showToast('스캔 완료!');
           }
-          treeHtml += '<span class="tree-char">' + (hasLine ? '│&nbsp;' : '&nbsp;&nbsp;') + '</span>';
-        }
+          break;
+
+        case 'passiveCapture':
+          if (msg.data && msg.data.page && msg.data.bookId === S.selectedBookId) {
+            S.markPageCaptured(msg.data.page);
+            S.loadBooks().then(function () { S.renderBookList(); });
+          }
+          break;
+
+        case 'captureStopped':
+          S.isScanning = false;
+          S.refreshBookData();
+          break;
+
+        case 'captureError':
+          S.isScanning = false;
+          S.refreshBookData();
+          if (msg.data) {
+            S.setScanUI('error', '스캔 실패: ' + (msg.data.message || ''));
+            S.showToast('스캔 오류: ' + (msg.data.message || ''));
+          }
+          break;
       }
-
-      html += '<div class="toc-edit-row" data-idx="' + i + '">' +
-        '<div class="toc-edit-depth-btns">' +
-          '<button class="toc-edit-depth-btn' + (canOutdent ? '' : ' disabled') + '" data-action="outdent" data-idx="' + i + '" title="상위로" ' + (canOutdent ? '' : 'disabled') + '>&lt;</button>' +
-          '<button class="toc-edit-depth-btn' + (canIndent ? '' : ' disabled') + '" data-action="indent" data-idx="' + i + '" title="하위로" ' + (canIndent ? '' : 'disabled') + '>&gt;</button>' +
-        '</div>' +
-        '<div class="toc-edit-tree">' + treeHtml + '</div>' +
-        '<input class="toc-edit-title" data-idx="' + i + '" value="' + escAttr(item.title || '') + '" placeholder="제목">' +
-        '<input class="toc-edit-page" type="number" data-idx="' + i + '" value="' + (item.page || '') + '" placeholder="p">' +
-        '<button class="toc-edit-del" data-action="delete" data-idx="' + i + '" title="삭제">✕</button>' +
-      '</div>';
-    }
-    if (editingToc.length === 0) {
-      html = '<div style="padding:40px;text-align:center;color:#aeaeb2;font-size:13px">목차 항목이 없습니다. + 추가 버튼을 눌러주세요.</div>';
-    }
-    list.innerHTML = html;
-    $('tocEditStatus').textContent = editingToc.length + '개 항목';
-
-    // Bind events
-    list.querySelectorAll('[data-action]').forEach(function (btn) {
-      if (btn.disabled) return;
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var idx = parseInt(this.dataset.idx, 10);
-        var action = this.dataset.action;
-        if (action === 'indent') {
-          editingToc[idx].depth = (editingToc[idx].depth || 1) + 1;
-        } else if (action === 'outdent') {
-          editingToc[idx].depth = (editingToc[idx].depth || 1) - 1;
-        } else if (action === 'delete') {
-          editingToc.splice(idx, 1);
-        }
-        renderTocEditor();
-      });
-    });
-    list.querySelectorAll('.toc-edit-title').forEach(function (inp) {
-      inp.addEventListener('input', function () {
-        editingToc[parseInt(this.dataset.idx, 10)].title = this.value;
-      });
-    });
-    list.querySelectorAll('.toc-edit-page').forEach(function (inp) {
-      inp.addEventListener('input', function () {
-        editingToc[parseInt(this.dataset.idx, 10)].page = parseInt(this.value, 10) || 0;
-      });
     });
   }
 
-  function addTocItem() {
-    editingToc.push({ page: 0, title: '', depth: 1 });
-    renderTocEditor();
-    // Focus new item's title
-    var inputs = $('tocEditList').querySelectorAll('.toc-edit-title');
-    if (inputs.length > 0) inputs[inputs.length - 1].focus();
-  }
-
-  function saveTocEdit() {
-    // Filter out empty items
-    var cleaned = editingToc.filter(function (item) { return item.title && item.page > 0; });
-    if (selectedBook) {
-      selectedBook.toc = cleaned;
-      extStoreBookMeta(selectedBookId, selectedBook.title, selectedBook.totalPages, cleaned).then(function () {
-        renderTOC();
-        closeTocEditor();
-        showToast('목차 저장 완료 (' + cleaned.length + '항목)');
-      });
-    }
-  }
-
+  // ── Event Listeners ──
   function setupEventListeners() {
-    $('deleteBookBtn').addEventListener('click', deleteBook);
-    $('dlPdf').addEventListener('click', downloadPDF);
-    $('exportBtn').addEventListener('click', exportSession);
+    $('deleteBookBtn').addEventListener('click', S.deleteBook);
+    $('dlPdf').addEventListener('click', S.downloadPDF);
+    $('exportBtn').addEventListener('click', S.exportSession);
     $('reinspectBtn').addEventListener('click', function () {
-      forceFullInspection();
+      S.forceFullInspection();
     });
-    $('tocRescanBtn').addEventListener('click', tocRescan);
-    $('tocEditBtn').addEventListener('click', openTocEditor);
-    $('tocEditClose').addEventListener('click', closeTocEditor);
-    $('tocEditBackdrop').addEventListener('click', closeTocEditor);
-    $('tocEditSave').addEventListener('click', saveTocEdit);
-    $('tocAddBtn').addEventListener('click', addTocItem);
+    $('tocRescanBtn').addEventListener('click', S.tocRescan);
+    $('tocEditBtn').addEventListener('click', S.openTocEditor);
+    $('tocEditClose').addEventListener('click', S.closeTocEditor);
+    $('tocEditBackdrop').addEventListener('click', S.closeTocEditor);
+    $('tocEditSave').addEventListener('click', S.saveTocEdit);
+    $('tocAddBtn').addEventListener('click', S.addTocItem);
     $('openReaderBtn').addEventListener('click', function () {
-      if (!selectedBookId) return;
+      if (!S.selectedBookId) return;
       chrome.runtime.sendMessage({
-        target: 'background', action: 'openReader', bookId: selectedBookId
+        target: 'background', action: 'openReader', bookId: S.selectedBookId
       }, function () { void chrome.runtime.lastError; });
     });
 
-    // Collapsible sections
     setupCollapsible('infoPanelsToggle', 'infoPanelsIcon', 'infoPanelsBody');
     setupCollapsible('gridToggle', 'gridIcon', 'pageGrid');
 
-    // Rescan all missing
     $('rescanAllBtn').addEventListener('click', function () {
-      var totalPages = (selectedBook && selectedBook.totalPages) || 0;
+      var totalPages = (S.selectedBook && S.selectedBook.totalPages) || 0;
       if (totalPages === 0) return;
       var capturedSet = {};
-      capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
-      // Find first missing and last missing
+      S.capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
       var first = 0, last = 0;
       for (var p = 1; p <= totalPages; p++) {
         if (!capturedSet[p]) { if (!first) first = p; last = p; }
       }
-      if (first === 0) { showToast('누락 페이지 없음'); return; }
-      rescanRange(first, last);
+      if (first === 0) { S.showToast('누락 페이지 없음'); return; }
+      S.rescanRange(first, last);
     });
 
-    // Grid filters
     $('gridFilters').querySelectorAll('.grid-filter').forEach(function (btn) {
       btn.addEventListener('click', function () {
         $('gridFilters').querySelectorAll('.grid-filter').forEach(function (b) { b.classList.remove('active'); });
@@ -1976,29 +702,26 @@
         var grid = $('pageGrid');
         var isSelect = grid.classList.contains('select-mode');
         grid.className = 'page-grid' + (filter !== 'all' ? ' filter-' + filter : '') + (isSelect ? ' select-mode' : '');
-        updateBatchBtn();
+        S.updateBatchBtn();
       });
     });
 
-    // Select all / deselect (respects active filter)
     $('selectAllBtn').addEventListener('click', function () {
       $('pageGrid').querySelectorAll('.page-tile').forEach(function (tile) {
-        // Skip tiles hidden by CSS filter
         if (tile.offsetWidth === 0) return;
         var cb = tile.querySelector('.tile-check');
         if (cb) { cb.checked = true; tile.classList.add('selected'); }
       });
-      updateBatchBtn();
+      S.updateBatchBtn();
     });
     $('deselectAllBtn').addEventListener('click', function () {
       $('pageGrid').querySelectorAll('.tile-check:checked').forEach(function (cb) {
         cb.checked = false;
         cb.parentElement.classList.remove('selected');
       });
-      updateBatchBtn();
+      S.updateBatchBtn();
     });
 
-    // Batch confirm normal
     $('batchConfirmBtn').addEventListener('click', function () {
       var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
       var count = 0;
@@ -2009,32 +732,30 @@
           tile.classList.remove('suspect', 'failed');
           tile.classList.add('captured');
           tile.title = pn + '페이지';
-          confirmedPages[pn] = true;
+          S.confirmedPages[pn] = true;
           count++;
         }
         cb.checked = false;
         tile.classList.remove('selected');
       });
-      saveConfirmedPages();
-      updateBatchBtn();
-      showToast(count + '개 페이지 정상 확인');
+      S.saveConfirmedPages();
+      S.updateBatchBtn();
+      S.showToast(count + '개 페이지 정상 확인');
     });
 
-    // Batch delete
     $('batchDeleteBtn').addEventListener('click', function () {
       var checked = $('pageGrid').querySelectorAll('.tile-check:checked');
       var pages = [];
       checked.forEach(function (cb) { pages.push(parseInt(cb.dataset.page, 10)); });
       if (pages.length === 0) return;
       if (!confirm(pages.length + '개 페이지를 삭제하시겠습니까?')) return;
-      batchDeletePages(pages);
+      S.batchDeletePages(pages);
     });
 
-    // Delegate checkbox clicks on grid
     $('pageGrid').addEventListener('change', function (e) {
       if (e.target.classList.contains('tile-check')) {
         e.target.parentElement.classList.toggle('selected', e.target.checked);
-        updateBatchBtn();
+        S.updateBatchBtn();
       }
     });
 
@@ -2043,25 +764,24 @@
     });
     $('importFile').addEventListener('change', function () {
       if (this.files && this.files[0]) {
-        importSession(this.files[0]);
+        S.importSession(this.files[0]);
         this.value = '';
       }
     });
 
-    // Preview modal
-    $('modalClose').addEventListener('click', closePreview);
-    $('modalBackdrop').addEventListener('click', closePreview);
-    $('prevPage').addEventListener('click', function () { navigatePreview(-1); });
-    $('nextPage').addEventListener('click', function () { navigatePreview(1); });
+    $('modalClose').addEventListener('click', S.closePreview);
+    $('modalBackdrop').addEventListener('click', S.closePreview);
+    $('prevPage').addEventListener('click', function () { S.navigatePreview(-1); });
+    $('nextPage').addEventListener('click', function () { S.navigatePreview(1); });
     $('copyPageBtn').addEventListener('click', function () {
       var img = $('previewImg');
       if (!img || !img.src) return;
       fetch(img.src).then(function (r) { return r.blob(); }).then(function (blob) {
         return navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       }).then(function () {
-        showToast('클립보드에 복사됨');
+        S.showToast('클립보드에 복사됨');
       }).catch(function () {
-        showToast('복사 실패');
+        S.showToast('복사 실패');
       });
     });
     $('dlPageBtn').addEventListener('click', function () {
@@ -2069,21 +789,20 @@
       if (!img || !img.src) return;
       var a = document.createElement('a');
       a.href = img.src;
-      var title = (selectedBook && selectedBook.title) || 'page';
-      a.download = title.replace(/[^a-zA-Z0-9가-힣]/g, '_') + '_p' + previewPageNum + '.png';
+      var title = (S.selectedBook && S.selectedBook.title) || 'page';
+      a.download = title.replace(/[^a-zA-Z0-9가-힣]/g, '_') + '_p' + S.previewPageNum + '.png';
       a.click();
     });
     $('deletePageBtn').addEventListener('click', function () {
-      if (previewPageNum > 0) deletePage(previewPageNum);
+      if (S.previewPageNum > 0) S.deletePage(S.previewPageNum);
     });
     $('markNormalBtn').addEventListener('click', function () {
-      setPageStatus(previewPageNum, 'captured');
-      updatePreviewButtons();
+      S.setPageStatus(S.previewPageNum, 'captured');
+      S.updatePreviewButtons();
     });
 
-    // Error dialog
-    $('errorCloseBtn').addEventListener('click', hideError);
-    $('errorBackdrop').addEventListener('click', hideError);
+    $('errorCloseBtn').addEventListener('click', S.hideError);
+    $('errorBackdrop').addEventListener('click', S.hideError);
     $('errorCopyBtn').addEventListener('click', function () {
       navigator.clipboard.writeText(getErrorText()).then(function () {
         $('errorCopyBtn').textContent = '복사됨!';
@@ -2091,167 +810,19 @@
       });
     });
 
-    // Keyboard navigation
     document.addEventListener('keydown', function (e) {
       if (!$('errorDialog').hidden) {
-        if (e.key === 'Escape') hideError();
+        if (e.key === 'Escape') S.hideError();
         return;
       }
       if ($('previewModal').hidden) return;
-      if (e.key === 'Escape') closePreview();
-      if (e.key === 'ArrowLeft') navigatePreview(-1);
-      if (e.key === 'ArrowRight') navigatePreview(1);
+      if (e.key === 'Escape') S.closePreview();
+      if (e.key === 'ArrowLeft') S.navigatePreview(-1);
+      if (e.key === 'ArrowRight') S.navigatePreview(1);
     });
   }
 
-  // ── Helpers ──
-
-  // Convert PNG dataURL to JPEG for PDF (reduces size ~10x)
-  function toJpegDataURL(dataURL, quality) {
-    return new Promise(function (resolve) {
-      if (dataURL.indexOf('image/png') === -1) { resolve(dataURL); return; }
-      var img = new Image();
-      img.onload = function () {
-        var c = document.createElement('canvas');
-        c.width = img.width;
-        c.height = img.height;
-        var ctx = c.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, c.width, c.height);
-        ctx.drawImage(img, 0, 0);
-        resolve(c.toDataURL('image/jpeg', quality || 0.92));
-      };
-      img.onerror = function () { resolve(dataURL); };
-      img.src = dataURL;
-    });
-  }
-
-  function getImageDimensions(dataURL) {
-    return new Promise(function (resolve, reject) {
-      var img = new Image();
-      img.onload = function () { resolve({ width: img.width, height: img.height }); };
-      img.onerror = function () { reject(new Error('Image load failed')); };
-      img.src = dataURL;
-    });
-  }
-
-  function calcPageDimensions(imgW, imgH, target) {
-    if (!target) {
-      var PX_TO_MM = 25.4 / 96;
-      return {
-        pageW: imgW * PX_TO_MM,
-        pageH: imgH * PX_TO_MM,
-        orientation: imgW > imgH ? 'landscape' : 'portrait'
-      };
-    }
-    return {
-      pageW: target.w,
-      pageH: target.h,
-      orientation: 'portrait'
-    };
-  }
-
-  function calcImageLayout(imgW, imgH, pageW, pageH, target) {
-    if (!target) {
-      return { x: 0, y: 0, w: pageW, h: pageH };
-    }
-    var margin = 5;
-    var areaW = pageW - margin * 2;
-    var areaH = pageH - margin * 2;
-    var scale = Math.min(areaW / imgW, areaH / imgH);
-    var w = imgW * scale;
-    var h = imgH * scale;
-    return {
-      x: (pageW - w) / 2,
-      y: (pageH - h) / 2,
-      w: w,
-      h: h
-    };
-  }
-
-  function sanitizeFilename(name) {
-    return (name || 'ebook').replace(/[\\/:*?"<>|]/g, '_').substring(0, 100);
-  }
-
-  function downloadBlob(blob, filename) {
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-  }
-
-  function showProgress(title, pct) {
-    $('progressOverlay').hidden = false;
-    $('progressTitle').textContent = title;
-    $('progressFill').style.width = pct + '%';
-    $('progressText').textContent = pct + '%';
-  }
-
-  function updateProgress(pct, text) {
-    $('progressFill').style.width = pct + '%';
-    $('progressText').textContent = text || (pct + '%');
-  }
-
-  function hideProgress() {
-    $('progressOverlay').hidden = true;
-  }
-
-  var toastTimer = null;
-  function showToast(msg) {
-    var t = $('toast');
-    t.textContent = msg;
-    t.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.classList.remove('show'); }, 3000);
-  }
-
-  function showError(title, message, detail) {
-    console.error('[SessionManager]', title, message, detail);
-    hideProgress();
-    $('errorDialog').hidden = false;
-    $('errorTitle').textContent = title || '오류 발생';
-    $('errorMessage').textContent = message || '';
-    $('errorDetail').textContent = detail || '(상세 정보 없음)';
-  }
-
-  function hideError() {
-    $('errorDialog').hidden = true;
-  }
-
-  function getErrorText() {
-    var title = $('errorTitle').textContent;
-    var message = $('errorMessage').textContent;
-    var detail = $('errorDetail').textContent;
-    var parts = [title];
-    if (message) parts.push(message);
-    if (detail) parts.push('\n' + detail);
-    return parts.join('\n');
-  }
-
-  function timeAgo(ts) {
-    if (!ts) return '';
-    var d = Math.floor((Date.now() - ts) / 1000);
-    if (d < 60) return '방금 전';
-    if (d < 3600) return Math.floor(d / 60) + '분 전';
-    if (d < 86400) return Math.floor(d / 3600) + '시간 전';
-    return Math.floor(d / 86400) + '일 전';
-  }
-
-  function esc(s) {
-    var d = document.createElement('div');
-    d.textContent = s || '';
-    return d.innerHTML;
-  }
-
-  function escAttr(s) {
-    return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
+  // ── Init ──
   init().catch(function (e) {
     showGlobalError('초기화 실패', '세션 관리자를 시작할 수 없습니다.', e);
   });

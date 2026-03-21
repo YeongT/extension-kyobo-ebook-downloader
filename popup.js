@@ -375,17 +375,6 @@
     return null;
   }
 
-  function timeAgo(ts) {
-    if (!ts) return '';
-    var d = Math.floor((Date.now() - ts) / 1000);
-    if (d < 60) return '방금 전';
-    if (d < 3600) return Math.floor(d / 60) + '분 전';
-    if (d < 86400) return Math.floor(d / 3600) + '시간 전';
-    return Math.floor(d / 86400) + '일 전';
-  }
-
-  function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-  function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
   loadSettings();
   init();
