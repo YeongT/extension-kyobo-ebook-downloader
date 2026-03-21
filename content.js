@@ -636,6 +636,46 @@
     });
   }
 
+  // ── Sound notifications via Web Audio API ──
+  function playBeep(type) {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.3;
+
+      if (type === 'success') {
+        // Two-tone ascending chime
+        osc.frequency.value = 660;
+        osc.type = 'sine';
+        osc.start();
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.stop(ctx.currentTime + 0.5);
+      } else if (type === 'error') {
+        // Low buzz
+        osc.frequency.value = 280;
+        osc.type = 'square';
+        gain.gain.value = 0.2;
+        osc.start();
+        gain.gain.setValueAtTime(0.2, ctx.currentTime + 0.3);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        osc.stop(ctx.currentTime + 0.6);
+      } else {
+        // Single ping
+        osc.frequency.value = 520;
+        osc.type = 'sine';
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+        osc.stop(ctx.currentTime + 0.3);
+      }
+      setTimeout(function () { ctx.close(); }, 1000);
+    } catch (e) {}
+  }
+
   function showToast(msg, duration) {
     if (!overlayRoot) return;
     var t = overlayRoot.getElementById('toast');
@@ -1026,6 +1066,7 @@
               var failMsg = '연속 ' + consErr + '회 캡처 실패 - 자동 중지됨';
               notifyPopup('captureError', { message: failMsg });
               showToast(failMsg, 5000);
+              playBeep('error');
               // Send persistent notification via background
               forwardToBackground('showNotification', {
                 title: '캡처 자동 중지',
@@ -1111,6 +1152,7 @@
         var msg = totalCached + '/' + total + '페이지 캡처 완료';
         if (missingPages.length > 0) msg += ' (' + missingPages.length + '개 누락)';
         showToast(msg, 5000);
+        playBeep(missingPages.length > 0 ? 'error' : 'success');
         setOState('idle');
         notifyPopup('captureComplete', {
           capturedCount: totalCached, title: title, partial: isPartialRescan,
@@ -1133,7 +1175,7 @@
       }
       clearSession();
     } catch (err) {
-      notifyPopup('captureError', { message: err.message }); setOState('error');
+      notifyPopup('captureError', { message: err.message }); setOState('error'); playBeep('error');
       if (captureSession && captureSession.autoRetry) { triggerRecovery(captureSession._currentPage || startPage); return; }
     } finally {
       if (!recoveryInFlight) {

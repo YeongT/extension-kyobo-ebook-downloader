@@ -321,3 +321,58 @@ async function startCaptureForBook(bookTitle, resume) {
     await chrome.storage.local.remove('pendingCapture');
   }
 }
+
+// ── Move viewer tabs to a dedicated popup window ──
+// When a kyobo viewer tab is created, move it to its own window
+// so canvas rendering persists even when the main browser window loses focus.
+var _viewerWindowId = null;
+
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url || tab.url.indexOf('wviewer.kyobobook.co.kr') === -1) return;
+
+  // Already in a popup window?
+  chrome.windows.get(tab.windowId, function (win) {
+    if (chrome.runtime.lastError || !win) return;
+    if (win.type === 'popup') {
+      _viewerWindowId = win.id;
+      return;
+    }
+
+    // Move tab to existing popup window or create one
+    if (_viewerWindowId) {
+      chrome.windows.get(_viewerWindowId, function (existingWin) {
+        if (chrome.runtime.lastError || !existingWin) {
+          createViewerWindow(tabId);
+        } else {
+          chrome.tabs.move(tabId, { windowId: _viewerWindowId, index: -1 }, function () {
+            if (chrome.runtime.lastError) {
+              createViewerWindow(tabId);
+            } else {
+              chrome.tabs.update(tabId, { active: true });
+            }
+          });
+        }
+      });
+    } else {
+      createViewerWindow(tabId);
+    }
+  });
+});
+
+function createViewerWindow(tabId) {
+  chrome.windows.create({
+    tabId: tabId,
+    type: 'popup',
+    width: 900,
+    height: 1000,
+    focused: true
+  }, function (win) {
+    if (win) _viewerWindowId = win.id;
+  });
+}
+
+// Clean up reference when popup window is closed
+chrome.windows.onRemoved.addListener(function (windowId) {
+  if (windowId === _viewerWindowId) _viewerWindowId = null;
+});
