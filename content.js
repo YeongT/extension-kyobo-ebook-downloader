@@ -838,6 +838,14 @@
     showMissingPages([]);
     notifyPopup('captureStarted', {});
 
+    // Update overlay range inputs to reflect actual capture range
+    if (overlayRoot) {
+      var oRS = overlayRoot.getElementById('oRangeStart');
+      var oRE = overlayRoot.getElementById('oRangeEnd');
+      if (oRS && startPage > 0) oRS.value = startPage;
+      if (oRE && endPage > 0) oRE.value = endPage;
+    }
+
     try {
       await callInject('clearState');
       var pi = await callInject('getPageInfo');
@@ -1099,24 +1107,27 @@
 
       if (captured > 0 && !shouldStop) {
         var isComplete = missingPages.length === 0 && totalCached >= total;
+        var isPartialRescan = startPage > 1 || endPage < total;
         var msg = totalCached + '/' + total + '페이지 캡처 완료';
         if (missingPages.length > 0) msg += ' (' + missingPages.length + '개 누락)';
         showToast(msg, 5000);
         setOState('idle');
         notifyPopup('captureComplete', {
-          capturedCount: totalCached, title: title, partial: shouldStop,
+          capturedCount: totalCached, title: title, partial: isPartialRescan,
           missing: missingPages.length, missingPages: missingPages
         });
-        // Open sessions tab and close viewer
-        setTimeout(function () {
-          chrome.runtime.sendMessage({
-            target: 'background', action: 'openSessions',
-            title: title
-          }, function () {
-            void chrome.runtime.lastError;
-            setTimeout(function () { window.close(); }, 500);
-          });
-        }, 2000);
+        // Only close viewer on full scan completion, keep open for partial rescan
+        if (!isPartialRescan) {
+          setTimeout(function () {
+            chrome.runtime.sendMessage({
+              target: 'background', action: 'openSessions',
+              title: title
+            }, function () {
+              void chrome.runtime.lastError;
+              setTimeout(function () { window.close(); }, 500);
+            });
+          }, 2000);
+        }
       } else if (shouldStop) {
         setOState('idle');
       }
@@ -1398,6 +1409,8 @@
             bookId: getBookId(), pageNum: result.pageNum,
             dataURL: result.dataURL, width: result.width, height: result.height
           });
+          // Notify sessions.js to update grid tile
+          notifyPopup('passiveCapture', { page: curPage, bookId: getBookId() });
           showStackToast(curPage + 'p 자동 캡처됨', 2500);
         }
       } catch (e) {}

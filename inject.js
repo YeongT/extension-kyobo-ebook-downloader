@@ -445,23 +445,21 @@
     } catch (e) {}
 
     // 4. Slider bar manipulation (most reliable for large jumps)
-    var totalPages = getViewerPageNum() ? getTotalPages() : 0;
+    var totalPages = getTotalPages();
     if (totalPages > 0) {
-      var slider = document.querySelector('input[type="range"].range_bar, input[type="range"][data-page], .range_bar input[type="range"]');
+      var slider = findSlider();
       if (slider) {
-        var pct = ((pageNum - 1) / (totalPages - 1)) * 100;
-        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(slider, pct);
-        slider.dispatchEvent(new Event('input', { bubbles: true }));
-        slider.dispatchEvent(new Event('change', { bubbles: true }));
-        return Promise.resolve(true);
+        return setSliderToPage(slider, pageNum, totalPages);
       }
     }
 
     // 5. UI input fallback (show header → type page → enter)
     return new Promise(function (resolve) {
+      // Show header/footer to expose controls
       var header = document.querySelector('.header_zone, [data-layout="header_zone"]');
       if (header) header.classList.remove('hide');
+      var footer = document.querySelector('.footer_zone, [data-layout="footer_zone"], .bottom_zone');
+      if (footer) footer.classList.remove('hide');
 
       var viewer = document.querySelector('[data-layout="viewer"]') || document.querySelector('.mid_zone');
       if (viewer) {
@@ -473,7 +471,15 @@
         }, 40 + Math.random() * 60);
       }
 
+      // After header/footer revealed, try slider again
       setTimeout(function () {
+        var slider2 = findSlider();
+        if (slider2) {
+          setSliderToPage(slider2, pageNum, totalPages || getTotalPages()).then(resolve);
+          return;
+        }
+
+        // Text input fallback
         var el = document.querySelector('.range_current[data-page="pageInfo"]');
         if (!el) { resolve(false); return; }
         dispatchMouseDown(el).then(function () { el.click(); });
@@ -502,6 +508,82 @@
       if (parts.length === 2) return parseInt(parts[1], 10) || 0;
     }
     return 0;
+  }
+
+  function findSlider() {
+    // Kyobo viewer: input[data-layout="rangeslider"] with class "bcrange"
+    var primary = document.querySelector('input[data-layout="rangeslider"].bcrange');
+    if (primary) return primary;
+    // Fallback: any visible range input in bottom control zone
+    var bottom = document.querySelector('.bottomcontrol_zone input[type="range"]');
+    if (bottom) return bottom;
+    // Generic fallback
+    var all = document.querySelectorAll('input[type="range"]');
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].offsetParent !== null) return all[i]; // first visible
+    }
+    return null;
+  }
+
+  function setSliderToPage(slider, pageNum, totalPages) {
+    return new Promise(function (resolve) {
+      var min = parseFloat(slider.min) || 1;
+      var max = parseFloat(slider.max) || totalPages;
+
+      // Kyobo slider uses min=1, max=totalPages directly
+      var val = Math.max(min, Math.min(max, pageNum));
+
+      // Set value via native setter to bypass framework interception
+      try {
+        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(slider, val);
+      } catch (e) {
+        slider.value = val;
+      }
+
+      // Trigger rangeslider.js update via jQuery if available
+      try {
+        if (window.$ && window.$(slider).data('plugin_rangeslider')) {
+          window.$(slider).val(val).change();
+          resolve(true);
+          return;
+        }
+      } catch (e) {}
+
+      // Dispatch events for non-jQuery handlers
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Simulate physical drag on the rangeslider__handle for rangeslider.js
+      var rsContainer = slider.nextElementSibling || slider.parentElement.querySelector('.rangeslider');
+      if (rsContainer && rsContainer.classList.contains('rangeslider')) {
+        var rect = rsContainer.getBoundingClientRect();
+        var ratio = (val - min) / (max - min);
+        // Check direction (ltr vs rtl)
+        var dir = slider.dataset.direction || 'ltr';
+        var targetX = dir === 'rtl'
+          ? rect.right - rect.width * ratio
+          : rect.left + rect.width * ratio;
+        var targetY = rect.top + rect.height / 2;
+
+        rsContainer.dispatchEvent(new MouseEvent('mousedown', {
+          bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
+        }));
+        setTimeout(function () {
+          document.dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
+          }));
+          setTimeout(function () {
+            document.dispatchEvent(new MouseEvent('mouseup', {
+              bubbles: true, cancelable: true, clientX: targetX, clientY: targetY
+            }));
+            resolve(true);
+          }, 30);
+        }, 30);
+      } else {
+        resolve(true);
+      }
+    });
   }
 
   // ── 5b. ZIP building from cache ──

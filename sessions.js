@@ -490,9 +490,13 @@
     thumbCache = {};
   }
 
+  var _inspectionRunning = false;
+
   async function loadAllThumbnails() {
+    if (_inspectionRunning) return; // prevent concurrent runs
     var captured = capturedPageNums.slice();
     if (captured.length === 0) return;
+    _inspectionRunning = true;
 
     // Check if we already have valid inspection data
     var stored = await loadInspection();
@@ -503,6 +507,7 @@
       updateFilterCounts();
       refreshDetailHeader();
       renderMissingRanges();
+      _inspectionRunning = false;
       return;
     }
 
@@ -546,6 +551,7 @@
       updateFilterCounts();
       refreshDetailHeader();
       renderMissingRanges();
+      _inspectionRunning = false;
       return;
     }
 
@@ -638,6 +644,7 @@
     }
 
     hideProgress();
+    _inspectionRunning = false;
     if (!gridLoadAbort) {
       saveInspection(suspectPages, thumbs, captured);
       inspectionData = { count: captured.length, pageSet: captured.slice(), suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
@@ -1195,22 +1202,27 @@
       showToast('뷰어가 연결되어야 재스캔 가능합니다');
       return;
     }
-    chrome.tabs.sendMessage(viewerTabId, {
-      action: 'startCapture',
-      options: {
-        startPage: startPage, endPage: endPage,
-        mode: 'normal', autoRetry: true, captureDelay: 500,
-        pageDelayMin: 800, pageDelayMax: 1500, resume: true
-      }
-    }, function (r) {
-      void chrome.runtime.lastError;
-      if (r && r.success) {
-        showToast(startPage + '-' + endPage + 'p 재스캔 시작');
-        // Switch to viewer
-        chrome.tabs.update(viewerTabId, { active: true });
-      } else {
-        showToast('재스캔 시작 실패');
-      }
+    // Load user settings for capture delay
+    chrome.storage.local.get({
+      pageDelayMin: 800, pageDelayMax: 1500
+    }, function (settings) {
+      chrome.tabs.sendMessage(viewerTabId, {
+        action: 'startCapture',
+        options: {
+          startPage: startPage, endPage: endPage,
+          mode: 'normal', autoRetry: false, captureDelay: 500,
+          pageDelayMin: settings.pageDelayMin, pageDelayMax: settings.pageDelayMax,
+          resume: true
+        }
+      }, function (r) {
+        void chrome.runtime.lastError;
+        if (r && r.success) {
+          showToast(startPage + '-' + endPage + 'p 재스캔 시작');
+          chrome.tabs.update(viewerTabId, { active: true });
+        } else {
+          showToast('재스캔 시작 실패');
+        }
+      });
     });
   }
 
@@ -1440,6 +1452,14 @@
             showToast('스캔 완료 - ' + msg.data.missing + '개 페이지 누락');
           } else {
             showToast('스캔 완료!');
+          }
+          break;
+
+        case 'passiveCapture':
+          if (msg.data && msg.data.page && msg.data.bookId === selectedBookId) {
+            markPageCaptured(msg.data.page);
+            // Update sidebar counts
+            loadBooks().then(function () { renderBookList(); });
           }
           break;
 
