@@ -92,6 +92,21 @@
     } catch (e) {}
   };
 
+  // Awaitable version of cachePage — waits for background DB write
+  C.cachePageAsync = function (bookId, pageNum, dataURL, width, height) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({
+          target: 'background', action: 'cachePage',
+          bookId: bookId, pageNum: pageNum, dataURL: dataURL, width: width, height: height
+        }, function (r) {
+          void chrome.runtime.lastError;
+          resolve(r && r.success);
+        });
+      } catch (e) { resolve(false); }
+    });
+  };
+
   C.getBookId = function () { return C.resolvedBookId || location.pathname + location.search; };
   C.getBookTitle = function () {
     try { return document.querySelector('[data-layout="title"]').textContent.trim(); } catch (e) { return ''; }

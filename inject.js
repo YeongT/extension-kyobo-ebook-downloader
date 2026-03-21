@@ -244,21 +244,42 @@
     });
   }
 
-  // ── 3. Canvas size normalization ──
-  // Reference canvas size from first capture (1-page view = full size)
-  // When 2-page view produces smaller canvas, upscale to match reference
+  // ── 3. Canvas size locking ──
+  // First large canvas sets the reference size. Subsequent canvas width/height
+  // assignments within ±20px of reference are snapped to exact reference.
+  // This makes PDF.js render into a fixed-size canvas regardless of sub-pixel
+  // layout variance (fullscreen, scrollbar, etc). No post-capture resizing needed.
   var _refCanvasWidth = 0;
   var _refCanvasHeight = 0;
 
-  function upscaleCanvas(srcCanvas, targetWidth) {
-    var ratio = srcCanvas.height / srcCanvas.width;
-    var targetHeight = Math.round(targetWidth * ratio);
-    var c = document.createElement('canvas');
-    c.width = targetWidth;
-    c.height = targetHeight;
-    c.getContext('2d').drawImage(srcCanvas, 0, 0, targetWidth, targetHeight);
-    return c;
-  }
+  var _origWidthDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width');
+  var _origHeightDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'height');
+
+  Object.defineProperty(HTMLCanvasElement.prototype, 'width', {
+    set: function (v) {
+      if (_refCanvasWidth > 0 && v > 100 && Math.abs(v - _refCanvasWidth) <= 20) {
+        v = _refCanvasWidth;
+      } else if (_refCanvasWidth === 0 && v > 1000) {
+        _refCanvasWidth = v;
+      }
+      _origWidthDesc.set.call(this, v);
+    },
+    get: function () { return _origWidthDesc.get.call(this); },
+    configurable: true
+  });
+
+  Object.defineProperty(HTMLCanvasElement.prototype, 'height', {
+    set: function (v) {
+      if (_refCanvasHeight > 0 && v > 100 && Math.abs(v - _refCanvasHeight) <= 20) {
+        v = _refCanvasHeight;
+      } else if (_refCanvasHeight === 0 && v > 1000) {
+        _refCanvasHeight = v;
+      }
+      _origHeightDesc.set.call(this, v);
+    },
+    get: function () { return _origHeightDesc.get.call(this); },
+    configurable: true
+  });
 
   // ── 3b. Find content canvas ──
   function findCanvas() {
@@ -272,7 +293,7 @@
     return document.querySelector('#content canvas, .mid_zone canvas');
   }
 
-  // Find all visible rendered canvases (for 2-page spread capture)
+  // Find all rendered canvases with actual content (not blank)
   function findAllCanvases() {
     var result = [];
     var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
@@ -280,15 +301,38 @@
       var c = pages[i].querySelector('.canvasLayer canvas');
       if (!c) c = pages[i].querySelector('canvas');
       if (c && c.width > 0 && c.height > 0) {
-        // Extract page number from pdfPage id (e.g., pdfPage_372 → 372)
+        // Verify canvas has actual content by sampling pixels
+        if (isCanvasBlank(c)) continue;
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
         var pageNum = idMatch ? parseInt(idMatch[1], 10) : 0;
         result.push({ canvas: c, pageNum: pageNum });
       }
     }
-    // Sort by page number
     result.sort(function (a, b) { return a.pageNum - b.pageNum; });
     return result;
+  }
+
+  // Quick check: sample 5 points — if all same color (white, black, or transparent), it's blank/unrendered
+  function isCanvasBlank(canvas) {
+    try {
+      var ctx = canvas.getContext('2d');
+      var w = canvas.width, h = canvas.height;
+      var points = [
+        [Math.floor(w * 0.25), Math.floor(h * 0.25)],
+        [Math.floor(w * 0.5), Math.floor(h * 0.5)],
+        [Math.floor(w * 0.75), Math.floor(h * 0.75)],
+        [Math.floor(w * 0.5), Math.floor(h * 0.25)],
+        [Math.floor(w * 0.25), Math.floor(h * 0.75)]
+      ];
+      for (var i = 0; i < points.length; i++) {
+        var px = ctx.getImageData(points[i][0], points[i][1], 1, 1).data;
+        if (px[3] === 0) continue; // transparent
+        var isWhite = px[0] >= 250 && px[1] >= 250 && px[2] >= 250;
+        var isBlack = px[0] <= 5 && px[1] <= 5 && px[2] <= 5;
+        if (!isWhite && !isBlack) return false; // has actual content
+      }
+      return true;
+    } catch (e) { return true; }
   }
 
   // ── 4. Page info ──
@@ -969,14 +1013,7 @@
         if (cpC.width === 0 || cpC.height === 0) { resp.data = { ok: false, error: 'canvas_empty' }; send(); break; }
         removeWatermarks();
         try {
-          // Normalize canvas to reference size if in 2-page spread mode
           var cpCanvas = cpC;
-          if (_refCanvasWidth > 0 && cpC.width < _refCanvasWidth * 0.9) {
-            cpCanvas = upscaleCanvas(cpC, _refCanvasWidth);
-          } else if (_refCanvasWidth === 0) {
-            _refCanvasWidth = cpC.width;
-            _refCanvasHeight = cpC.height;
-          }
           var cpURL = (_captureFormat === 'image/jpeg')
             ? cpCanvas.toDataURL('image/jpeg', _captureQuality)
             : cpCanvas.toDataURL('image/png');
@@ -986,7 +1023,7 @@
           cachePageData(cpBid, cpPN, cpURL, cpCanvas.width, cpCanvas.height).then(function () {
             resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: true };
             send();
-          }).catch(function (cacheErr) {
+          }).catch(function () {
             resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: false };
             send();
           });
@@ -1003,14 +1040,7 @@
         for (var bi = 0; bi < bothCanvases.length; bi++) {
           (function (bc, idx) {
             try {
-              // Normalize to reference size
               var outCanvas = bc.canvas;
-              if (_refCanvasWidth > 0 && bc.canvas.width < _refCanvasWidth * 0.9) {
-                outCanvas = upscaleCanvas(bc.canvas, _refCanvasWidth);
-              } else if (_refCanvasWidth === 0) {
-                _refCanvasWidth = bc.canvas.width;
-                _refCanvasHeight = bc.canvas.height;
-              }
               var url = (_captureFormat === 'image/jpeg')
                 ? outCanvas.toDataURL('image/jpeg', _captureQuality)
                 : outCanvas.toDataURL('image/png');

@@ -290,48 +290,43 @@
           continue;
         }
 
-        // Navigate to page and capture
+        // Show navigation status
+        var navLabel = C._scanRange ? C._scanRange.start + '-' + C._scanRange.end + 'p' : '';
+        C.setOText(navLabel ? navLabel + ' 이동 중... p' + page : page + 'p 이동 중...');
+
+        // Navigate to target page
         var result = await C.navigateAndCapture(page);
 
-        // Try 2-page spread capture: grab both visible canvases at once
-        var bothResults = null;
-        try { bothResults = await C.callInject('captureBothPages'); } catch (e) {}
-        if (bothResults && bothResults.length > 1) {
-          // Got multiple pages from spread view
-          var extraCaptured = false;
-          for (var bi = 0; bi < bothResults.length; bi++) {
-            var br = bothResults[bi];
-            if (!br || !br.ok || !br.pageNum) continue;
-            if (cached[br.pageNum]) continue;
-            if (br.pageNum < startPage || br.pageNum > endPage) continue;
-            cached[br.pageNum] = true;
-            captured++; totalCached++;
-            if (br.dataURL) {
-              C.forwardToBackground('cachePage', { bookId: br.bookId, pageNum: br.pageNum, dataURL: br.dataURL, width: br.width, height: br.height });
-            }
-            C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: br.pageNum, message: totalCached + '/' + total + ' 캡처 완료' });
-            if (br.pageNum !== page) extraCaptured = true;
-          }
-          // Skip the next page if we already captured it from the spread
-          if (extraCaptured && page + 1 <= endPage && cached[page + 1]) {
-            scanDone++;
-            page++; // skip next iteration
-          }
-          consErr = 0;
-          scanDone++;
-          C.updateO(totalCached, total, page, scanDone, scanTotal);
-        } else if (result && result.ok) {
+        if (result && result.ok) {
           captured++; totalCached++; consErr = 0;
           scanDone++;
           cached[page] = true;
           if (result.dataURL) {
-            C.forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
-          }
-          if (result.cached === false) {
-            C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
+            await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
+            result.dataURL = null;
           }
           C.updateO(totalCached, total, page, scanDone, scanTotal);
           C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
+
+          // Bonus: capture pre-loaded adjacent pages
+          try {
+            var preloaded = await C.callInject('captureBothPages');
+            if (preloaded && preloaded.length > 0) {
+              for (var pi = 0; pi < preloaded.length; pi++) {
+                var pp = preloaded[pi];
+                if (!pp || !pp.ok || !pp.pageNum) continue;
+                if (cached[pp.pageNum]) continue;
+                if (pp.pageNum < startPage || pp.pageNum > endPage) continue;
+                cached[pp.pageNum] = true;
+                captured++; totalCached++;
+                if (pp.dataURL) {
+                  await C.cachePageAsync(pp.bookId, pp.pageNum, pp.dataURL, pp.width, pp.height);
+                  pp.dataURL = null;
+                }
+              }
+              C.updateO(totalCached, total, page, scanDone, scanTotal);
+            }
+          } catch (e) {}
         } else {
           // Page failed - retry up to 3 times before giving up
           var retried = false;
@@ -349,7 +344,8 @@
               scanDone++;
               cached[page] = true;
               if (result.dataURL) {
-                C.forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
+                await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
+                result.dataURL = null;
               }
               C.updateO(totalCached, total, page, scanDone, scanTotal);
               C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 재시도 성공' });
@@ -461,8 +457,9 @@
           capturedCount: totalCached, title: title, partial: isPartialRescan,
           missing: C.missingPages.length, missingPages: C.missingPages
         });
-        // Only close viewer on full scan completion, keep open for partial rescan
-        if (!isPartialRescan) {
+        // Full scan to end of book → close viewer + open sessions
+        // Partial/mid-range → just switch to sessions tab, keep viewer open
+        if (endPage >= total && startPage <= 1) {
           setTimeout(function () {
             chrome.runtime.sendMessage({
               target: 'background', action: 'openSessions',

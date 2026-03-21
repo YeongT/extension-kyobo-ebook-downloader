@@ -606,14 +606,15 @@
         case 'captureProgress':
           if (msg.data) {
             S.isScanning = true;
-            var hasScanRange = msg.data.scanTotal > 0 && msg.data.scanTotal < msg.data.total;
-            var dispCur = hasScanRange ? msg.data.scanCurrent : msg.data.current;
-            var dispTot = hasScanRange ? msg.data.scanTotal : msg.data.total;
+            // Show range-specific progress when not scanning entire book
+            var isRangeCapture = msg.data.scanTotal > 0 && msg.data.scanTotal < msg.data.total;
+            var dispCur = isRangeCapture ? msg.data.scanCurrent : msg.data.current;
+            var dispTot = isRangeCapture ? msg.data.scanTotal : msg.data.total;
             var pct = dispTot > 0 ? Math.round(dispCur / dispTot * 100) : 0;
             $('scanFill').style.width = pct + '%';
             $('scanLiveText').textContent = dispCur + '/' + dispTot + ' (' + pct + '%)' +
               (msg.data.message ? ' - ' + msg.data.message : '');
-            S.setScanUI('active', hasScanRange ? '재스캔 진행 중' : '스캔 진행 중');
+            S.setScanUI('active', '스캔 진행 중');
 
             if (msg.data.page && msg.data.message && msg.data.message.indexOf('캡처 완료') !== -1) {
               S.markPageCaptured(msg.data.page);
@@ -631,7 +632,10 @@
 
         case 'captureComplete':
           S.isScanning = false;
-          S.clearInspection();
+          // Only clear full inspection on complete scan, not partial rescan
+          if (!msg.data || !msg.data.partial) {
+            S.clearInspection();
+          }
           S.refreshBookData().then(function () {
             if (msg.data && msg.data.missingPages && msg.data.missingPages.length > 0) {
               S.markPagesFailed(msg.data.missingPages);

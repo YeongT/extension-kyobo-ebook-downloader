@@ -1,9 +1,10 @@
 (function (C) {
   'use strict';
 
-  C._passiveLastPage = 0;
   C._passiveCapturing = false;
   C._passiveCachedSet = null;
+  var _lastDetectedPage = 0;
+  var _pollTimer = null;
 
   C.initPassiveCapture = async function () {
     try {
@@ -34,61 +35,72 @@
   };
 
   C.startPassivePolling = function () {
-    setInterval(async function () {
-      if (C.isCapturing || C._passiveCapturing) return;
-      if (!C._passiveCachedSet) return;
-
-      try {
-        var curPage = await C.callInject('getViewerPageNum');
-        if (!curPage || curPage === C._passiveLastPage) return;
-        C._passiveLastPage = curPage;
-
-        // Check if any visible page needs capture
-        var hasUncached = !C._passiveCachedSet[curPage];
-        // Also check adjacent page (2-page spread: curPage and curPage+1)
-        var hasUncachedNext = !C._passiveCachedSet[curPage + 1];
-        if (!hasUncached && !hasUncachedNext) return;
-
-        C._passiveCapturing = true;
-        await C.delay(400);
-        await C.waitCanvasReady(3000);
-        await C.delay(200);
-
-        // Try capturing all visible canvases (works in both 1-page and 2-page view)
-        var results = null;
-        try { results = await C.callInject('captureBothPages'); } catch (e) {}
-
-        if (results && results.length > 0) {
-          var capturedAny = false;
-          for (var i = 0; i < results.length; i++) {
-            var r = results[i];
-            if (!r || !r.ok || !r.pageNum) continue;
-            if (C._passiveCachedSet[r.pageNum]) continue;
-            C._passiveCachedSet[r.pageNum] = true;
-            C.forwardToBackground('cachePage', {
-              bookId: C.getBookId(), pageNum: r.pageNum,
-              dataURL: r.dataURL, width: r.width, height: r.height
-            });
-            C.notifyPopup('passiveCapture', { page: r.pageNum, bookId: C.getBookId() });
-            C.showStackToast(r.pageNum + 'p 자동 캡처됨', 2500);
-            capturedAny = true;
-          }
-        } else {
-          // Fallback: single page capture
-          var result = await C.callInject('capturePageOnly', { pageNum: curPage });
-          if (result && result.ok && result.dataURL) {
-            C._passiveCachedSet[curPage] = true;
-            C.forwardToBackground('cachePage', {
-              bookId: C.getBookId(), pageNum: result.pageNum,
-              dataURL: result.dataURL, width: result.width, height: result.height
-            });
-            C.notifyPopup('passiveCapture', { page: curPage, bookId: C.getBookId() });
-            C.showStackToast(curPage + 'p 자동 캡처됨', 2500);
-          }
+    // Use setTimeout chain instead of setInterval to prevent overlap
+    function poll() {
+      _pollTimer = setTimeout(async function () {
+        if (C.isCapturing || C._passiveCapturing || !C._passiveCachedSet) {
+          poll();
+          return;
         }
-      } catch (e) {}
-      C._passiveCapturing = false;
-    }, 1000);
+
+        try {
+          var curPage = await C.callInject('getViewerPageNum');
+          if (!curPage || curPage === _lastDetectedPage) {
+            poll();
+            return;
+          }
+          _lastDetectedPage = curPage;
+
+          // Check current and adjacent page
+          var hasUncached = !C._passiveCachedSet[curPage];
+          var hasUncachedNext = !C._passiveCachedSet[curPage + 1];
+          if (!hasUncached && !hasUncachedNext) {
+            poll();
+            return;
+          }
+
+          C._passiveCapturing = true;
+          await C.delay(400);
+          await C.waitCanvasReady(3000);
+          await C.delay(200);
+
+          // Capture all visible rendered canvases
+          var results = null;
+          try { results = await C.callInject('captureBothPages'); } catch (e) {}
+
+          if (results && results.length > 0) {
+            for (var i = 0; i < results.length; i++) {
+              var r = results[i];
+              if (!r || !r.ok || !r.pageNum) continue;
+              if (C._passiveCachedSet[r.pageNum]) continue;
+              C._passiveCachedSet[r.pageNum] = true;
+              if (r.dataURL) {
+                await C.cachePageAsync(C.getBookId(), r.pageNum, r.dataURL, r.width, r.height);
+                r.dataURL = null;
+              }
+              C.notifyPopup('passiveCapture', { page: r.pageNum, bookId: C.getBookId() });
+              C.showStackToast(r.pageNum + 'p 자동 캡처됨', 2500);
+            }
+          } else {
+            // Fallback: single page
+            var result = await C.callInject('capturePageOnly', { pageNum: curPage });
+            if (result && result.ok) {
+              C._passiveCachedSet[curPage] = true;
+              if (result.dataURL) {
+                await C.cachePageAsync(C.getBookId(), result.pageNum, result.dataURL, result.width, result.height);
+                result.dataURL = null;
+              }
+              C.notifyPopup('passiveCapture', { page: curPage, bookId: C.getBookId() });
+              C.showStackToast(curPage + 'p 자동 캡처됨', 2500);
+            }
+          }
+        } catch (e) {}
+
+        C._passiveCapturing = false;
+        poll(); // schedule next after current is fully done
+      }, 1000);
+    }
+    poll();
   };
 
 })(window._C = window._C || {});

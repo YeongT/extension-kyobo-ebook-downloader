@@ -145,7 +145,7 @@
               '<input type="number" class="range-in" id="oRangeEnd" value="1" min="1">' +
             '</div>' +
             '<div id="oIdleRow">' +
-              '<button class="cbtn cbtn-start" id="oStart">범위 캡처 시작</button>' +
+              '<button class="cbtn cbtn-start" id="oStart" disabled>로딩 중...</button>' +
             '</div>' +
             '<div id="oCapRow" style="display:none">' +
               '<div class="cbtn-row">' +
@@ -355,8 +355,13 @@
         // Auto-fill range with smart defaults on first load
         if (re && !C.oRangeEndFocused && re.value === '1' && info.total > 1) {
           re.value = info.total;
-          // Set start to first uncached page
           C.autoFillRangeStart(info.total);
+        }
+        // Enable capture button once page info is available
+        var startBtn = C.overlayRoot.getElementById('oStart');
+        if (startBtn && info.total > 0 && startBtn.disabled) {
+          startBtn.disabled = false;
+          startBtn.textContent = '범위 캡처 시작';
         }
       }).catch(function () {});
     }, 2000);
@@ -386,16 +391,17 @@
       C.callInject('getCacheInfo').then(function (ci) {
         if (ci && ci.cachedPageNums) ci.cachedPageNums.forEach(function (p) { cachedSet[p] = true; });
       }).catch(function () {}).then(function () {
-        if (Object.keys(cachedSet).length === 0) return;
+        var keys = Object.keys(cachedSet);
+        if (keys.length === 0) return;
 
-        // Find first missing page
-        for (var p = 1; p <= total; p++) {
-          if (!cachedSet[p]) {
-            rs.value = p;
-            return;
-          }
-        }
-        rs.value = 1;
+        // Set start to last captured page + 1 (resume from where left off)
+        var maxCaptured = 0;
+        keys.forEach(function (k) {
+          var n = parseInt(k, 10);
+          if (n > maxCaptured) maxCaptured = n;
+        });
+        var resumeFrom = maxCaptured < total ? maxCaptured + 1 : 1;
+        rs.value = resumeFrom;
       });
     });
   };
@@ -457,8 +463,7 @@
     el.className = 'stack-toast';
     el.textContent = msg;
     stack.appendChild(el);
-    // Max 6 visible
-    while (stack.children.length > 6) stack.removeChild(stack.firstChild);
+    while (stack.children.length > 10) stack.removeChild(stack.firstChild);
     requestAnimationFrame(function () { el.classList.add('show'); });
     setTimeout(function () {
       el.classList.remove('show');
@@ -507,6 +512,12 @@
     }
   };
 
+  C.setOText = function (msg) {
+    if (!C.overlayRoot) return;
+    var text = C.overlayRoot.getElementById('oText');
+    if (text && !C.isPaused) text.textContent = msg;
+  };
+
   C.updateO = function (capturedSoFar, bookTotal, page, scanDone, scanTotal) {
     if (!C.overlayRoot) return;
     var text = C.overlayRoot.getElementById('oText');
@@ -515,15 +526,15 @@
     if (bookTotal > 0) C._bookTotal = bookTotal;
     var bt = C._bookTotal || bookTotal;
 
-    // Partial rescan: show scan range progress
+    // Partial range: show range-specific progress
     if (C._scanRange && scanTotal > 0 && scanTotal < bt) {
       var sPct = scanTotal > 0 ? Math.round(scanDone / scanTotal * 100) : 0;
-      if (text && !C.isPaused) text.textContent = C._scanRange.start + '-' + C._scanRange.end + 'p 재스캔 중...';
+      if (text && !C.isPaused) text.textContent = C._scanRange.start + '-' + C._scanRange.end + 'p 캡처 중...';
       if (pr) pr.textContent = scanDone + '/' + scanTotal + ' (' + sPct + '%)' + (page ? '  p' + page : '');
       if (bar) bar.style.width = sPct + '%';
     } else {
       var pct = bt > 0 ? Math.round(capturedSoFar / bt * 100) : 0;
-      if (text && !C.isPaused) text.textContent = '캡처 진행중...';
+      if (text && !C.isPaused) text.textContent = '캡처 중...';
       if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + (page ? '  p' + page : '');
       if (bar) bar.style.width = pct + '%';
     }
