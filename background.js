@@ -121,6 +121,17 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       }
       return true;
 
+    case 'showNotification':
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon128.png',
+        title: msg.title || '교보 eBook',
+        message: msg.message || '',
+        requireInteraction: !!msg.requireInteraction
+      });
+      sendResponse({ success: true });
+      return false;
+
     default:
       return false;
   }

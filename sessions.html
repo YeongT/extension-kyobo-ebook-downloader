@@ -38,96 +38,89 @@
         <div class="detail-header">
           <div class="detail-title-row">
             <h2 id="detailTitle"></h2>
-            <button class="icon-btn danger" id="deleteBookBtn" title="도서 삭제">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-            </button>
+            <div class="title-actions">
+              <button class="icon-btn" id="exportBtn" title="내보내기">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              </button>
+              <button class="icon-btn danger" id="deleteBookBtn" title="도서 삭제">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+              </button>
+            </div>
           </div>
           <div class="detail-meta" id="detailMeta"></div>
           <div class="detail-progress-row">
             <div class="progress-bar large"><div class="progress-fill" id="detailFill"></div></div>
             <span class="progress-label" id="detailProgress"></span>
           </div>
-        </div>
 
-        <!-- Viewer Status -->
-        <div class="scan-card" id="scanCard">
-          <div class="scan-header">
+          <!-- Scan Live Progress (inline, only during active scanning) -->
+          <div class="scan-live-row" id="scanCard" hidden>
+            <div class="scan-live-text" id="scanLiveText">0/0 (0%)</div>
+            <div class="progress-bar large"><div class="progress-fill" id="scanFill"></div></div>
+          </div>
+
+          <!-- Viewer status + all actions on one line -->
+          <div class="viewer-action-bar" id="viewerActionBar">
             <span class="scan-status" id="scanStatus">
               <span class="scan-dot" id="scanDot"></span>
               <span id="scanStatusText">뷰어 연결 안 됨</span>
             </span>
-          </div>
-          <div class="scan-body">
-            <div class="scan-live" id="scanLiveInfo" hidden>
-              <div class="progress-bar large"><div class="progress-fill" id="scanFill"></div></div>
-              <div class="scan-live-text" id="scanLiveText">0/0 (0%)</div>
-            </div>
-            <div class="scan-actions">
-              <button class="action-btn primary" id="switchToViewerBtn" hidden>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-                뷰어로 전환
-              </button>
-              <button class="action-btn primary" id="openViewerBtn">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                뷰어 열기
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Download & Export -->
-        <div class="detail-toolbar" id="downloadToolbar">
-          <div class="toolbar-row">
-            <div class="toolbar-label">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              다운로드
-            </div>
-            <div class="toolbar-actions">
+            <span style="flex:1"></span>
+            <button class="bar-btn" id="switchToViewerBtn" title="뷰어로 전환" hidden>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              뷰어로 전환
+            </button>
+            <button class="bar-btn" id="openViewerBtn" title="뷰어 열기">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              뷰어 열기
+            </button>
+            <span class="bar-sep"></span>
+            <button class="bar-btn" id="openReaderBtn" title="리더">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+              리더
+            </button>
+            <span class="bar-sep" id="downloadToolbar"></span>
+            <div class="pdf-group" id="pdfGroup">
               <select id="pdfSize" class="select-input">
-                <option value="original">원본 크기</option>
+                <option value="original">원본</option>
                 <option value="a4">A4</option>
                 <option value="b5">B5</option>
                 <option value="a5">A5</option>
               </select>
-              <button class="action-btn primary" id="dlPdf">
+              <button class="bar-btn primary" id="dlPdf" title="PDF 저장">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 PDF
-              </button>
-              <button class="action-btn" id="dlZip">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                ZIP
-              </button>
-            </div>
-          </div>
-          <div class="toolbar-divider"></div>
-          <div class="toolbar-row">
-            <div class="toolbar-label">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
-              도구
-            </div>
-            <div class="toolbar-actions">
-              <button class="action-btn" id="openReaderBtn">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
-                리더
-              </button>
-              <button class="action-btn" id="exportBtn">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                내보내기
               </button>
             </div>
           </div>
         </div>
 
-        <!-- TOC -->
-        <div class="grid-section" id="tocSection" hidden>
-          <div class="grid-header collapsible" id="tocToggle">
-            <span id="tocLabel">목차</span>
+        <!-- TOC + Missing/Suspect -->
+        <div class="info-panels" id="tocMissingRow" hidden>
+          <div class="info-panels-header collapsible" id="infoPanelsToggle">
+            <span id="infoPanelsLabel">목차 · 구간</span>
             <span style="flex:1"></span>
-            <button class="toc-action-btn" id="tocRescanBtn" title="뷰어에서 목차 재스캔">재스캔</button>
-            <button class="toc-action-btn" id="tocEditBtn" title="목차 직접 편집">편집</button>
-            <span class="collapse-icon" id="tocIcon">▾</span>
+            <span class="collapse-icon" id="infoPanelsIcon">▾</span>
           </div>
-          <div id="tocList" class="toc-list"></div>
+          <div class="info-panels-body" id="infoPanelsBody">
+            <div class="info-panel toc-panel" id="tocSection" hidden>
+              <div class="panel-header">
+                <span id="tocLabel">목차</span>
+                <span style="flex:1"></span>
+                <button class="toc-action-btn" id="tocRescanBtn" title="뷰어에서 목차 재스캔">재스캔</button>
+                <button class="toc-action-btn" id="tocEditBtn" title="목차 직접 편집">편집</button>
+              </div>
+              <div id="tocList" class="toc-list"></div>
+            </div>
+            <div class="info-panel missing-panel" id="missingSection" hidden>
+              <div class="panel-header">
+                <span id="missingLabel">누락 구간</span>
+                <span style="flex:1"></span>
+                <button class="panel-action-btn rescan-all" id="rescanAllBtn">전체 재시도</button>
+              </div>
+              <div class="missing-ranges" id="missingRanges"></div>
+            </div>
+          </div>
         </div>
 
     <!-- TOC Edit Modal (fixed overlay, outside main content flow) -->
@@ -148,16 +141,6 @@
         </div>
       </div>
     </div>
-
-        <!-- Missing ranges -->
-        <div class="grid-section" id="missingSection" hidden>
-          <div class="grid-header">
-            <span id="missingLabel">누락 구간</span>
-            <span style="flex:1"></span>
-            <button class="grid-sel-btn rescan-all-btn" id="rescanAllBtn">전체 재시도</button>
-          </div>
-          <div class="missing-ranges" id="missingRanges"></div>
-        </div>
 
         <!-- Page Grid -->
         <div class="grid-section" id="gridSection">

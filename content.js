@@ -681,17 +681,28 @@
   // capturedSoFar: total cached pages including previously cached ones
   var _bookTotal = 0;
 
-  function updateO(capturedSoFar, bookTotal, page) {
+  var _scanRange = null; // { start, end, total } — set when partial rescan
+
+  function updateO(capturedSoFar, bookTotal, page, scanDone, scanTotal) {
     if (!overlayRoot) return;
     var text = overlayRoot.getElementById('oText');
     var pr = overlayRoot.getElementById('oPr');
     var bar = overlayRoot.getElementById('oBar');
     if (bookTotal > 0) _bookTotal = bookTotal;
     var bt = _bookTotal || bookTotal;
-    var pct = bt > 0 ? Math.round(capturedSoFar / bt * 100) : 0;
-    if (text && !isPaused) text.textContent = '캡처 진행중...';
-    if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + (page ? '  p' + page : '');
-    if (bar) bar.style.width = pct + '%';
+
+    // Partial rescan: show scan range progress
+    if (_scanRange && scanTotal > 0 && scanTotal < bt) {
+      var sPct = scanTotal > 0 ? Math.round(scanDone / scanTotal * 100) : 0;
+      if (text && !isPaused) text.textContent = _scanRange.start + '-' + _scanRange.end + 'p 재스캔 중...';
+      if (pr) pr.textContent = scanDone + '/' + scanTotal + ' (' + sPct + '%)' + (page ? '  p' + page : '');
+      if (bar) bar.style.width = sPct + '%';
+    } else {
+      var pct = bt > 0 ? Math.round(capturedSoFar / bt * 100) : 0;
+      if (text && !isPaused) text.textContent = '캡처 진행중...';
+      if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + (page ? '  p' + page : '');
+      if (bar) bar.style.width = pct + '%';
+    }
   }
 
   function showMissingPages(missing) {
@@ -809,6 +820,10 @@
       if (endPage <= 0 || endPage > total) endPage = total;
       if (total === 0) { notifyPopup('captureError', { message: '페이지 정보 없음' }); isCapturing = false; setOState('error'); return; }
 
+      // Set scan range for partial rescan display
+      var isPartial = startPage > 1 || endPage < total;
+      _scanRange = isPartial ? { start: startPage, end: endPage, total: endPage - startPage + 1 } : null;
+
       // Save session early so /invalidUse redirect can recover
       saveSession(Object.assign({}, options, { resume: true }), startPage);
 
@@ -876,7 +891,7 @@
       var totalCached = Object.keys(cached).length;
       _bookTotal = total;
 
-      notifyPopup('captureProgress', { current: totalCached, total: total, message: '준비 중...' });
+      notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: 0, scanTotal: endPage - startPage + 1, message: '준비 중...' });
       var dims = await callInject('getCanvasDimensions');
       if (!dims) { notifyPopup('captureError', { message: '캔버스 없음' }); isCapturing = false; setOState('error'); return; }
 
@@ -898,6 +913,8 @@
       }
 
       var captured = 0, skipped = 0, consErr = 0;
+      var scanTotal = endPage - startPage + 1;
+      var scanDone = 0;
 
       for (var page = startPage; page <= endPage; page++) {
         if (shouldStop) { notifyPopup('captureStopped', { capturedCount: totalCached }); break; }
@@ -915,8 +932,9 @@
         if (cached[page]) {
           skipped++;
           consErr = 0;
-          updateO(totalCached, total, page);
-          notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 캐시 건너뜀' });
+          scanDone++;
+          updateO(totalCached, total, page, scanDone, scanTotal);
+          notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 캐시 건너뜀' });
           continue;
         }
 
@@ -925,6 +943,7 @@
 
         if (result && result.ok) {
           captured++; totalCached++; consErr = 0;
+          scanDone++;
           // Mark as cached so re-runs skip this page
           cached[page] = true;
           if (result.dataURL) {
@@ -932,17 +951,17 @@
           }
           // Warn if MAIN world cache write failed (data still sent to background cache)
           if (result.cached === false) {
-            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
+            notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 캐시 쓰기 실패 (백업 저장됨)' });
           }
-          updateO(totalCached, total, page);
-          notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
+          updateO(totalCached, total, page, scanDone, scanTotal);
+          notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
         } else {
           // Page failed - retry up to 3 times before giving up
           var retried = false;
           var errReason = (result && result.error) ? result.error : 'unknown';
           for (var retryN = 1; retryN <= 3 && !shouldStop; retryN++) {
-            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 재시도 ' + retryN + '/3...' });
-            updateO(totalCached, total, page);
+            notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 재시도 ' + retryN + '/3...' });
+            updateO(totalCached, total, page, scanDone, scanTotal);
             await delay(liveSettings.dMin * 2);
 
             if (document.hidden) { await focusViewerTab(); await delay(400); }
@@ -950,27 +969,44 @@
             if (result && result.ok) {
               retried = true;
               captured++; totalCached++; consErr = 0;
+              scanDone++;
               cached[page] = true;
               if (result.dataURL) {
                 forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
               }
-              updateO(totalCached, total, page);
-              notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 재시도 성공' });
+              updateO(totalCached, total, page, scanDone, scanTotal);
+              notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 재시도 성공' });
               break;
             }
           }
 
           if (!retried) {
             consErr++;
+            scanDone++;
             missingPages.push(page);
-            notifyPopup('captureProgress', { current: totalCached, total: total, page: page, message: page + 'p 실패 (3회 재시도 후): ' + errReason });
+            notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 실패 (3회 재시도 후): ' + errReason });
             showToast(page + 'p 캡처 실패', 3000);
 
             if (consErr >= 3) {
-              if (autoRetry) { triggerRecovery(page); return; }
-              notifyPopup('captureError', { message: '연속 ' + consErr + '회 실패: ' + errReason }); break;
+              shouldStop = true;
+              var failMsg = '연속 ' + consErr + '회 캡처 실패 - 자동 중지됨';
+              notifyPopup('captureError', { message: failMsg });
+              showToast(failMsg, 5000);
+              // Send persistent notification via background
+              forwardToBackground('showNotification', {
+                title: '캡처 자동 중지',
+                message: failMsg + ' (' + page + '페이지)',
+                requireInteraction: true
+              });
+              break;
             }
           }
+        }
+
+        // Keep viewer in foreground
+        if (document.hidden) {
+          await focusViewerTab();
+          await delay(300);
         }
 
         // Delay between pages
@@ -1280,6 +1316,72 @@
     }
   });
 
+  // ── Passive capture: auto-scan when user browses manually ──
+  var _passiveLastPage = 0;
+  var _passiveCapturing = false;
+  var _passiveCachedSet = null;
+
+  async function initPassiveCapture() {
+    // Build cached page set from extension DB
+    try {
+      var pi = await callInject('getPageInfo');
+      if (!pi || !pi.title) return;
+      var title = pi.title;
+      var bookId = 'title:' + title;
+      try {
+        var bgLookup = await new Promise(function (resolve) {
+          chrome.runtime.sendMessage({ target: 'background', action: 'findBookByTitle', title: title }, function (r) {
+            void chrome.runtime.lastError; resolve(r);
+          });
+        });
+        if (bgLookup && bgLookup.bookId) bookId = bgLookup.bookId;
+      } catch (e) {}
+      resolvedBookId = bookId;
+
+      var extPages = await new Promise(function (resolve) {
+        chrome.runtime.sendMessage({ target: 'background', action: 'getPagesInfo', bookId: bookId }, function (r) {
+          void chrome.runtime.lastError; resolve(r);
+        });
+      });
+      _passiveCachedSet = {};
+      if (extPages && extPages.pages) {
+        extPages.pages.forEach(function (p) { _passiveCachedSet[p] = true; });
+      }
+    } catch (e) {}
+  }
+
+  function startPassivePolling() {
+    setInterval(async function () {
+      if (isCapturing || _passiveCapturing) return;
+      if (!_passiveCachedSet) return;
+
+      try {
+        var curPage = await callInject('getViewerPageNum');
+        if (!curPage || curPage === _passiveLastPage) return;
+        _passiveLastPage = curPage;
+
+        if (_passiveCachedSet[curPage]) return;
+
+        // Uncached page detected — auto capture
+        _passiveCapturing = true;
+        await delay(300); // let canvas settle
+        await waitCanvasReady(3000);
+        await delay(200);
+
+        var result = await callInject('capturePageOnly', { pageNum: curPage });
+        if (result && result.ok && result.dataURL) {
+          _passiveCachedSet[curPage] = true;
+          forwardToBackground('cachePage', {
+            bookId: getBookId(), pageNum: result.pageNum,
+            dataURL: result.dataURL, width: result.width, height: result.height
+          });
+          showToast(curPage + 'p 자동 캡처됨', 1500);
+        }
+      } catch (e) {}
+      _passiveCapturing = false;
+    }, 1000);
+  }
+
   // ── Init ──
   if (checkInvalidUse()) {
     // On /invalidUse page - skip normal init, just handle recovery
@@ -1293,5 +1395,11 @@
     setTimeout(function () {
       if (!isCapturing) cacheBookMetaOnLoad();
     }, 4000);
+    // Start passive capture after initial setup
+    setTimeout(function () {
+      initPassiveCapture().then(function () {
+        startPassivePolling();
+      });
+    }, 8000);
   }
 })();

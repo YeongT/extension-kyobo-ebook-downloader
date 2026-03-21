@@ -129,42 +129,52 @@
       return;
     }
 
-    var html = '';
-    for (var i = 0; i < books.length; i++) {
-      var b = books[i];
-      var pct = (b.totalPages > 0 && b.cachedCount > 0)
-        ? Math.round(b.cachedCount / b.totalPages * 100)
-        : 0;
-      var isActive = b.bookId === selectedBookId;
+    // Load all inspection data for sidebar ring colors
+    var inspectionKeys = books.map(function (b) { return 'inspection_' + b.bookId; });
+    chrome.storage.local.get(inspectionKeys, function (stored) {
+      var html = '';
+      for (var i = 0; i < books.length; i++) {
+        var b = books[i];
+        var insp = stored['inspection_' + b.bookId];
+        var suspectCount = insp && insp.suspectPages ? insp.suspectPages.length : 0;
+        var confirmed = (b.cachedCount || 0) - suspectCount;
+        var pct = (b.totalPages > 0 && confirmed > 0)
+          ? Math.round(confirmed / b.totalPages * 100)
+          : 0;
+        var isActive = b.bookId === selectedBookId;
+        var isComplete = b.totalPages > 0 && confirmed >= b.totalPages;
+        var hasSuspect = suspectCount > 0;
 
-      var r = 14, stroke = 3, circ = 2 * Math.PI * r;
-      var dashOffset = circ - (pct / 100) * circ;
-      var ringColor = pct >= 100 ? '#34c759' : '#e94560';
-      var bgRing = isActive ? 'rgba(255,255,255,.15)' : '#f0f0f0';
-      var ringSvg = '<svg width="36" height="36" viewBox="0 0 36 36">' +
-        '<circle cx="18" cy="18" r="' + r + '" fill="none" stroke="' + bgRing + '" stroke-width="' + stroke + '"/>' +
-        '<circle cx="18" cy="18" r="' + r + '" fill="none" stroke="' + ringColor + '" stroke-width="' + stroke + '" ' +
-          'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + dashOffset.toFixed(1) + '" ' +
-          'stroke-linecap="round" transform="rotate(-90 18 18)"/>' +
-        '<text x="18" y="19" text-anchor="middle" dominant-baseline="middle" ' +
-          'font-size="10" font-weight="700" fill="' + (isActive ? '#e94560' : '#86868b') + '">' + pct + '</text>' +
-      '</svg>';
+        var r = 14, stroke = 3, circ = 2 * Math.PI * r;
+        var dashOffset = circ - (pct / 100) * circ;
+        var ringColor = isComplete ? '#34c759' : hasSuspect ? '#ff9500' : '#e94560';
+        var bgRing = isActive ? 'rgba(255,255,255,.15)' : '#f0f0f0';
+        var ringSvg = '<svg width="36" height="36" viewBox="0 0 36 36">' +
+          '<circle cx="18" cy="18" r="' + r + '" fill="none" stroke="' + bgRing + '" stroke-width="' + stroke + '"/>' +
+          '<circle cx="18" cy="18" r="' + r + '" fill="none" stroke="' + ringColor + '" stroke-width="' + stroke + '" ' +
+            'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + dashOffset.toFixed(1) + '" ' +
+            'stroke-linecap="round" transform="rotate(-90 18 18)"/>' +
+          '<text x="18" y="19" text-anchor="middle" dominant-baseline="middle" ' +
+            'font-size="10" font-weight="700" fill="' + (isActive ? '#e94560' : '#86868b') + '">' + pct + '</text>' +
+        '</svg>';
 
-      html += '<div class="book-item' + (isActive ? ' active' : '') + '" data-bookid="' + escAttr(b.bookId) + '">' +
-        '<div class="book-item-icon">' + ringSvg + '</div>' +
-        '<div class="book-item-info">' +
-          '<div class="book-item-title" title="' + escAttr(b.title || '') + '">' + esc(b.title || '(제목 없음)') + '</div>' +
-          '<div class="book-item-meta">' +
-            '<span>' + (b.cachedCount || 0) + '/' + (b.totalPages || '?') + 'p</span>' +
+        html += '<div class="book-item' + (isActive ? ' active' : '') + '" data-bookid="' + escAttr(b.bookId) + '">' +
+          '<div class="book-item-icon">' + ringSvg + '</div>' +
+          '<div class="book-item-info">' +
+            '<div class="book-item-title" title="' + escAttr(b.title || '') + '">' + esc(b.title || '(제목 없음)') + '</div>' +
+            '<div class="book-item-meta">' +
+              '<span>' + (b.cachedCount || 0) + '/' + (b.totalPages || '?') + 'p</span>' +
+              (hasSuspect ? '<span style="color:#ff9500"> · ' + suspectCount + ' 의심</span>' : '') +
+            '</div>' +
           '</div>' +
-        '</div>' +
-      '</div>';
-    }
-    container.innerHTML = html;
+        '</div>';
+      }
+      container.innerHTML = html;
 
-    container.querySelectorAll('.book-item').forEach(function (el) {
-      el.addEventListener('click', function () {
-        selectBook(this.dataset.bookid);
+      container.querySelectorAll('.book-item').forEach(function (el) {
+        el.addEventListener('click', function () {
+          selectBook(this.dataset.bookid);
+        });
       });
     });
   }
@@ -268,11 +278,13 @@
       $('completeBadge').hidden = true;
     }
 
-    // Hide scan card when complete + not scanning + no viewer
-    $('scanCard').hidden = isComplete && !isScanning && !viewerTabId;
+    // Scan card only visible during active scanning
+    $('scanCard').hidden = !isScanning;
 
     // Show/hide sections based on data availability
-    $('downloadToolbar').hidden = cachedCount === 0;
+    var hideDownload = cachedCount === 0;
+    $('downloadToolbar').hidden = hideDownload;
+    $('pdfGroup').hidden = hideDownload;
     $('gridSection').hidden = totalPages === 0;
 
     // TOC
@@ -322,6 +334,24 @@
     }
   }
 
+  function updateTocMissingRow() {
+    var row = $('tocMissingRow');
+    if (!row) return;
+    var tocVisible = !$('tocSection').hidden;
+    var missingVisible = !$('missingSection').hidden;
+    row.hidden = !tocVisible && !missingVisible;
+    if (row.hidden) return;
+    // Update header label
+    var label = $('infoPanelsLabel');
+    if (tocVisible && missingVisible) {
+      label.textContent = '목차 · 누락/의심 구간';
+    } else if (tocVisible) {
+      label.textContent = '목차';
+    } else {
+      label.textContent = '누락 · 의심 구간';
+    }
+  }
+
   // ── Render TOC ──
   function renderTOC() {
     var toc = (selectedBook && selectedBook.toc) || [];
@@ -329,10 +359,12 @@
 
     if (!toc || toc.length === 0) {
       section.hidden = true;
+      updateTocMissingRow();
       return;
     }
 
     section.hidden = false;
+    updateTocMissingRow();
     $('tocLabel').textContent = '목차 (' + toc.length + '항목)';
 
     var html = '';
@@ -865,43 +897,27 @@
   function setScanUI(state, statusText) {
     var dot = $('scanDot');
     var text = $('scanStatusText');
+    var isConnected = state === 'connected' || state === 'active' || state === 'recovering';
 
-    var totalPages = (selectedBook && selectedBook.totalPages) || 0;
-    var cachedCount = capturedPageNums.length;
-    var isComplete = totalPages > 0 && cachedCount >= totalPages;
-
-    // Hide scan card when complete + disconnected (avoids duplicate with complete-badge)
-    if (isComplete && state !== 'active' && state !== 'recovering' && state !== 'connected') {
-      $('scanCard').hidden = true;
-      return;
-    }
-    $('scanCard').hidden = false;
-
-    if (isComplete && state !== 'active' && state !== 'recovering') {
-      dot.className = 'scan-dot complete';
-      text.textContent = '스캔 완료';
-      $('scanLiveInfo').hidden = true;
-    } else if (state === 'recovering') {
+    if (state === 'recovering' || state === 'active') {
       dot.className = 'scan-dot active';
       text.textContent = statusText;
-      $('scanLiveInfo').hidden = false;
-    } else if (state === 'active') {
-      dot.className = 'scan-dot active';
-      text.textContent = statusText;
-      $('scanLiveInfo').hidden = false;
-    } else if (state === 'error') {
-      dot.className = 'scan-dot idle';
-      text.textContent = statusText;
-      $('scanLiveInfo').hidden = true;
+      $('scanCard').hidden = false;
     } else if (state === 'connected') {
       dot.className = 'scan-dot complete';
       text.textContent = statusText;
-      $('scanLiveInfo').hidden = true;
+      $('scanCard').hidden = true;
     } else {
       dot.className = 'scan-dot idle';
       text.textContent = statusText;
-      $('scanLiveInfo').hidden = true;
+      $('scanCard').hidden = true;
     }
+
+    // Disable viewer-dependent buttons when disconnected
+    $('rescanAllBtn').disabled = !isConnected;
+    // Rescan buttons in ranges
+    var rescanBtns = document.querySelectorAll('.range-rescan');
+    rescanBtns.forEach(function (btn) { btn.disabled = !isConnected; });
   }
 
   // Incremental page grid update: flip a single tile without full re-render
@@ -949,7 +965,7 @@
   function renderMissingRanges() {
     var totalPages = (selectedBook && selectedBook.totalPages) || 0;
     var section = $('missingSection');
-    if (totalPages === 0) { section.hidden = true; return; }
+    if (totalPages === 0) { section.hidden = true; updateTocMissingRow(); return; }
 
     var capturedSet = {};
     capturedPageNums.forEach(function (n) { capturedSet[n] = true; });
@@ -993,9 +1009,10 @@
     var hasMissing = ranges.length > 0;
     var hasSuspect = suspectRanges.length > 0;
 
-    if (!hasMissing && !hasSuspect) { section.hidden = true; return; }
+    if (!hasMissing && !hasSuspect) { section.hidden = true; updateTocMissingRow(); return; }
 
     section.hidden = false;
+    updateTocMissingRow();
 
     var html = '';
 
@@ -1003,7 +1020,9 @@
     if (hasMissing) {
       var totalMissing = 0;
       ranges.forEach(function (r) { totalMissing += r.end - r.start + 1; });
+      html += '<div class="range-group">';
       html += '<div class="range-section-label missing-label">누락 ' + totalMissing + '페이지 · ' + ranges.length + '구간</div>';
+      html += '<div class="range-items">';
       for (var i = 0; i < ranges.length; i++) {
         var r = ranges[i];
         var count = r.end - r.start + 1;
@@ -1014,11 +1033,14 @@
           '<button class="range-rescan" data-start="' + r.start + '" data-end="' + r.end + '">재스캔</button>' +
         '</div>';
       }
+      html += '</div></div>';
     }
 
     // Suspect ranges
     if (hasSuspect) {
+      html += '<div class="range-group">';
       html += '<div class="range-section-label suspect-label">의심 ' + suspectPages.length + '페이지 · ' + suspectRanges.length + '구간</div>';
+      html += '<div class="range-items">';
       for (var j = 0; j < suspectRanges.length; j++) {
         var sr = suspectRanges[j];
         var scount = sr.end - sr.start + 1;
@@ -1029,9 +1051,10 @@
           '<button class="range-rescan" data-start="' + sr.start + '" data-end="' + sr.end + '">재스캔</button>' +
         '</div>';
       }
+      html += '</div></div>';
     }
 
-    $('missingLabel').textContent = '누락 · 의심 구간';
+    $('missingLabel').innerHTML = '<strong>누락 · 의심 구간</strong>';
     $('missingRanges').innerHTML = html;
 
     // Bind rescan buttons
@@ -1221,6 +1244,18 @@
     // Start always-on polling
     startLivePolling();
 
+    // Instant detection when viewer tab is closed
+    chrome.tabs.onRemoved.addListener(function (tabId) {
+      if (tabId === viewerTabId) {
+        viewerTabId = null;
+        isScanning = false;
+        $('switchToViewerBtn').hidden = true;
+        $('openViewerBtn').hidden = false;
+        setScanUI('disconnected', '뷰어 연결 안 됨');
+        refreshBookData();
+      }
+    });
+
     // Listen for real-time messages from content.js
     chrome.runtime.onMessage.addListener(function (msg) {
       if (!msg || msg.source !== 'KYOBO_CONTENT') return;
@@ -1244,11 +1279,15 @@
         case 'captureProgress':
           if (msg.data) {
             isScanning = true;
-            var pct = msg.data.total > 0 ? Math.round(msg.data.current / msg.data.total * 100) : 0;
+            // Use scan-range progress if partial, otherwise overall
+            var hasScanRange = msg.data.scanTotal > 0 && msg.data.scanTotal < msg.data.total;
+            var dispCur = hasScanRange ? msg.data.scanCurrent : msg.data.current;
+            var dispTot = hasScanRange ? msg.data.scanTotal : msg.data.total;
+            var pct = dispTot > 0 ? Math.round(dispCur / dispTot * 100) : 0;
             $('scanFill').style.width = pct + '%';
-            $('scanLiveText').textContent = msg.data.current + '/' + msg.data.total + ' (' + pct + '%)' +
+            $('scanLiveText').textContent = dispCur + '/' + dispTot + ' (' + pct + '%)' +
               (msg.data.message ? ' - ' + msg.data.message : '');
-            setScanUI('active', '스캔 진행 중 - 뷰어에서 제어하세요');
+            setScanUI('active', hasScanRange ? '재스캔 진행 중' : '스캔 진행 중');
 
             // Incrementally update page grid tile
             if (msg.data.page && msg.data.message && msg.data.message.indexOf('캡처 완료') !== -1) {
@@ -1559,7 +1598,8 @@
   // ── Event Listeners ──
   function setupCollapsible(toggleId, iconId, contentId) {
     var collapsed = false;
-    $(toggleId).addEventListener('click', function () {
+    $(toggleId).addEventListener('click', function (e) {
+      if (e.target.closest('.toc-action-btn') || e.target.closest('.panel-action-btn')) return;
       collapsed = !collapsed;
       $(contentId).hidden = collapsed;
       $(iconId).className = 'collapse-icon' + (collapsed ? ' collapsed' : '');
@@ -1748,7 +1788,6 @@
   function setupEventListeners() {
     $('deleteBookBtn').addEventListener('click', deleteBook);
     $('dlPdf').addEventListener('click', downloadPDF);
-    $('dlZip').addEventListener('click', downloadZIP);
     $('exportBtn').addEventListener('click', exportSession);
     $('tocRescanBtn').addEventListener('click', tocRescan);
     $('tocEditBtn').addEventListener('click', openTocEditor);
@@ -1764,7 +1803,7 @@
     });
 
     // Collapsible sections
-    setupCollapsible('tocToggle', 'tocIcon', 'tocList');
+    setupCollapsible('infoPanelsToggle', 'infoPanelsIcon', 'infoPanelsBody');
     setupCollapsible('gridToggle', 'gridIcon', 'pageGrid');
 
     // Rescan all missing
