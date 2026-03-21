@@ -68,6 +68,51 @@
         </div>
       </div>
       <div class="card">
+        <div class="setting-item">
+          <label class="setting-label">고해상도 캡처</label>
+          <div class="delay-row" style="margin-top:4px">
+            <span class="setting-sub">해상도 배율</span>
+            <select id="sCaptureDPR" class="select-input-sm">
+              <option value="1">1x (원본)</option>
+              <option value="2">2x</option>
+              <option value="3" selected>3x (권장)</option>
+              <option value="4">4x</option>
+            </select>
+          </div>
+          <div class="delay-row" style="margin-top:4px">
+            <span class="setting-sub">캡처 포맷</span>
+            <select id="sCaptureFormat" class="select-input-sm">
+              <option value="png" selected>PNG (무손실, 선명)</option>
+              <option value="jpeg">JPEG (작은 파일, 약간 손실)</option>
+            </select>
+          </div>
+          <div class="delay-row" style="margin-top:4px" id="qualityRow">
+            <span class="setting-sub">JPEG 품질</span>
+            <input type="number" id="sCaptureQuality" class="delay-input" value="92" min="50" max="100" step="1">
+          </div>
+          <div class="info-text" style="margin-top:6px">
+            <p>높은 배율 = 선명한 텍스트. JPEG = 작은 파일</p>
+            <p>변경 후 뷰어를 다시 열어야 적용됩니다</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="setting-item">
+          <label class="setting-label">빈 페이지 감지 (의심 분류 기준)</label>
+          <div class="delay-row" style="margin-top:4px">
+            <span class="setting-sub">흰색 기준 RGB</span>
+            <input type="number" id="sBlankThreshold" class="delay-input" value="245" min="200" max="255" step="1">
+          </div>
+          <div class="delay-row" style="margin-top:4px">
+            <span class="setting-sub">흰색 비율 %</span>
+            <input type="number" id="sBlankRatio" class="delay-input" value="98" min="50" max="100" step="1">
+          </div>
+          <div class="info-text" style="margin-top:6px">
+            <p>값을 낮추면 더 민감하게 빈 페이지를 감지합니다</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
         <div class="info-text">
           <p>스텔스 모드: 랜덤 딜레이 + 가끔 긴 휴식</p>
           <p>"비정상적인 접근" 발생 시 자동 복구</p>

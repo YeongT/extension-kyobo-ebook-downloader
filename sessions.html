@@ -77,22 +77,44 @@
 
         <!-- Download & Export -->
         <div class="detail-toolbar" id="downloadToolbar">
-          <div class="toolbar-group">
-            <select id="pdfSize" class="select-input">
-              <option value="original">원본 크기</option>
-              <option value="a4">A4 (210x297mm)</option>
-              <option value="b5">B5 (182x257mm)</option>
-              <option value="a5">A5 (148x210mm)</option>
-            </select>
-            <button class="action-btn primary" id="dlPdf">PDF 저장</button>
-            <button class="action-btn" id="dlZip">ZIP 저장</button>
+          <div class="toolbar-row">
+            <div class="toolbar-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              다운로드
+            </div>
+            <div class="toolbar-actions">
+              <select id="pdfSize" class="select-input">
+                <option value="original">원본 크기</option>
+                <option value="a4">A4</option>
+                <option value="b5">B5</option>
+                <option value="a5">A5</option>
+              </select>
+              <button class="action-btn primary" id="dlPdf">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                PDF
+              </button>
+              <button class="action-btn" id="dlZip">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                ZIP
+              </button>
+            </div>
           </div>
-          <div class="toolbar-group">
-            <button class="action-btn" id="openReaderBtn">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
-              리더
-            </button>
-            <button class="action-btn" id="exportBtn">세션 내보내기</button>
+          <div class="toolbar-divider"></div>
+          <div class="toolbar-row">
+            <div class="toolbar-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+              도구
+            </div>
+            <div class="toolbar-actions">
+              <button class="action-btn" id="openReaderBtn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/></svg>
+                리더
+              </button>
+              <button class="action-btn" id="exportBtn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                내보내기
+              </button>
+            </div>
           </div>
         </div>
 

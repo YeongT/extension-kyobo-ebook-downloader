@@ -388,11 +388,21 @@
         img.style.maxWidth = 'none';
       });
     } else {
-      slots.forEach(function (s) { s.style.width = zoom + '%'; s.style.maxWidth = 'none'; });
+      // Manual zoom: pixel-based, relative to each image's natural size
       imgs.forEach(function (img) {
-        img.style.width = zoom + '%';
+        var w = img.naturalWidth > 0 ? Math.round(img.naturalWidth * zoom / 100) : maxW;
+        img.style.width = w + 'px';
         img.style.maxHeight = 'none';
         img.style.maxWidth = 'none';
+      });
+      slots.forEach(function (s) {
+        var img = s.querySelector('.scroll-page');
+        if (img && img.naturalWidth > 0) {
+          s.style.width = Math.round(img.naturalWidth * zoom / 100) + 'px';
+        } else {
+          s.style.width = maxW + 'px';
+        }
+        s.style.maxWidth = 'none';
       });
     }
   }
@@ -421,6 +431,23 @@
   }
 
   // ── Fit / Zoom ──
+  // Get current effective zoom as % of natural image size
+  function getEffectiveZoom() {
+    if (fitMode === 'manual') return zoom;
+    if (viewMode === 'single') {
+      var img = $('pageImg');
+      if (img.naturalWidth > 0 && img.clientWidth > 0) {
+        return Math.round(img.clientWidth / img.naturalWidth * 100);
+      }
+    } else if (viewMode === 'scroll') {
+      var firstImg = $('scrollContainer').querySelector('.scroll-page');
+      if (firstImg && firstImg.naturalWidth > 0 && firstImg.clientWidth > 0) {
+        return Math.round(firstImg.clientWidth / firstImg.naturalWidth * 100);
+      }
+    }
+    return 100;
+  }
+
   function applyFit() {
     if (viewMode === 'spread') { applySpreadFit(); return; }
     if (viewMode === 'scroll') { applyScrollFit(); return; }
@@ -436,7 +463,11 @@
       img.style.maxWidth = (area.clientWidth - 48) + 'px';
       img.style.maxHeight = (area.clientHeight - 48) + 'px';
     } else {
-      img.style.width = zoom + '%';
+      // Manual zoom: pixel-based, relative to natural image size
+      var naturalW = img.naturalWidth;
+      if (naturalW > 0) {
+        img.style.width = Math.round(naturalW * zoom / 100) + 'px';
+      }
       img.style.maxWidth = 'none';
       img.style.maxHeight = 'none';
     }
@@ -602,8 +633,8 @@
     }
   });
 
-  $('zoomIn').addEventListener('click', function () { setZoom((fitMode === 'manual' ? zoom : 100) + 25); });
-  $('zoomOut').addEventListener('click', function () { setZoom((fitMode === 'manual' ? zoom : 100) - 25); });
+  $('zoomIn').addEventListener('click', function () { setZoom(getEffectiveZoom() + 25); });
+  $('zoomOut').addEventListener('click', function () { setZoom(getEffectiveZoom() - 25); });
 
   $('fitWidth').addEventListener('click', function () {
     fitMode = 'width';
@@ -781,8 +812,8 @@
     switch (e.key) {
       case 'ArrowLeft': e.preventDefault(); navigate(-1); break;
       case 'ArrowRight': e.preventDefault(); navigate(1); break;
-      case '+': case '=': e.preventDefault(); setZoom((fitMode === 'manual' ? zoom : 100) + 25); break;
-      case '-': e.preventDefault(); setZoom((fitMode === 'manual' ? zoom : 100) - 25); break;
+      case '+': case '=': e.preventDefault(); setZoom(getEffectiveZoom() + 25); break;
+      case '-': e.preventDefault(); setZoom(getEffectiveZoom() - 25); break;
       case 'w': case 'W': e.preventDefault(); $('fitWidth').click(); break;
       case 'f': case 'F':
         if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); $('fitPage').click(); }

@@ -218,17 +218,22 @@
     var title = selectedBook.title || '(제목 없음)';
     var totalPages = selectedBook.totalPages || 0;
     var cachedCount = capturedPageNums.length;
-    var pct = totalPages > 0 ? Math.round(cachedCount / totalPages * 100) : 0;
-    var isComplete = totalPages > 0 && cachedCount >= totalPages;
+    var suspectCount = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages.length : 0;
+    var confirmedCount = cachedCount - suspectCount;
+    var missingCount = totalPages > 0 ? totalPages - cachedCount : 0;
+    var pct = totalPages > 0 ? Math.round(confirmedCount / totalPages * 100) : 0;
+    var isComplete = totalPages > 0 && confirmedCount >= totalPages;
     var hasData = cachedCount > 0 || totalPages > 0;
 
     $('detailTitle').textContent = title;
 
     // Meta info
     if (hasData) {
-      var missingCount = totalPages > 0 ? totalPages - cachedCount : 0;
       var metaHtml = '<span>' + esc(String(totalPages)) + ' 페이지</span>' +
         '<span>' + esc(String(cachedCount)) + ' 캡처됨</span>';
+      if (suspectCount > 0) {
+        metaHtml += '<span style="color:#e94560">' + esc(String(suspectCount)) + ' 의심</span>';
+      }
       if (missingCount > 0) {
         metaHtml += '<span style="color:#ff9500">' + esc(String(missingCount)) + ' 누락</span>';
       }
@@ -242,10 +247,10 @@
       $('detailMeta').hidden = false;
     }
 
-    // Progress bar
+    // Progress bar — suspect pages excluded from completion
     var fill = $('detailFill');
     fill.style.width = pct + '%';
-    fill.className = 'progress-fill' + (isComplete ? ' complete' : '');
+    fill.className = 'progress-fill' + (isComplete ? ' complete' : suspectCount > 0 ? ' has-suspect' : '');
     $('detailProgress').textContent = hasData ? pct + '%' : '';
     $('detailFill').parentElement.parentElement.hidden = !hasData;
 
@@ -263,6 +268,9 @@
       $('completeBadge').hidden = true;
     }
 
+    // Hide scan card when complete + not scanning + no viewer
+    $('scanCard').hidden = isComplete && !isScanning && !viewerTabId;
+
     // Show/hide sections based on data availability
     $('downloadToolbar').hidden = cachedCount === 0;
     $('gridSection').hidden = totalPages === 0;
@@ -273,6 +281,45 @@
     renderMissingRanges();
     renderPageGrid();
     renderScanControls();
+  }
+
+  // Lightweight header-only refresh (after inspection updates suspect data)
+  function refreshDetailHeader() {
+    if (!selectedBook) return;
+    var totalPages = selectedBook.totalPages || 0;
+    var cachedCount = capturedPageNums.length;
+    var suspectCount = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages.length : 0;
+    var confirmedCount = cachedCount - suspectCount;
+    var missingCount = totalPages > 0 ? totalPages - cachedCount : 0;
+    var pct = totalPages > 0 ? Math.round(confirmedCount / totalPages * 100) : 0;
+    var isComplete = totalPages > 0 && confirmedCount >= totalPages;
+
+    // Update meta
+    var metaHtml = '<span>' + esc(String(totalPages)) + ' 페이지</span>' +
+      '<span>' + esc(String(cachedCount)) + ' 캡처됨</span>';
+    if (suspectCount > 0) {
+      metaHtml += '<span style="color:#e94560">' + esc(String(suspectCount)) + ' 의심</span>';
+    }
+    if (missingCount > 0) {
+      metaHtml += '<span style="color:#ff9500">' + esc(String(missingCount)) + ' 누락</span>';
+    }
+    if (selectedBook.timestamp) {
+      metaHtml += '<span>' + esc(timeAgo(selectedBook.timestamp)) + '</span>';
+    }
+    $('detailMeta').innerHTML = metaHtml;
+
+    // Update progress bar
+    var fill = $('detailFill');
+    fill.style.width = pct + '%';
+    fill.className = 'progress-fill' + (isComplete ? ' complete' : suspectCount > 0 ? ' has-suspect' : '');
+    $('detailProgress').textContent = pct + '%';
+
+    // Update completion badge
+    if (isComplete) {
+      if ($('completeBadge')) $('completeBadge').hidden = false;
+    } else {
+      if ($('completeBadge')) $('completeBadge').hidden = true;
+    }
   }
 
   // ── Render TOC ──
@@ -345,9 +392,35 @@
     });
 
     $('gridLabel').textContent = '페이지 맵 (' + capturedPageNums.length + '/' + totalPages + ')';
+    updateFilterCounts();
 
     // Load thumbnails — skip full inspection if no changes
     loadAllThumbnails();
+  }
+
+  // ── Update filter count badges ──
+  function updateFilterCounts() {
+    var grid = $('pageGrid');
+    if (!grid) return;
+    var counts = {
+      all: grid.querySelectorAll('.page-tile').length,
+      captured: grid.querySelectorAll('.page-tile.captured').length,
+      suspect: grid.querySelectorAll('.page-tile.suspect').length,
+      missing: grid.querySelectorAll('.page-tile.missing').length,
+      failed: grid.querySelectorAll('.page-tile.failed').length
+    };
+    $('gridFilters').querySelectorAll('.grid-filter').forEach(function (btn) {
+      var filter = btn.dataset.filter;
+      var count = counts[filter] || 0;
+      var badge = btn.querySelector('.filter-count');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'filter-count';
+        btn.appendChild(badge);
+      }
+      badge.textContent = count;
+      badge.className = 'filter-count' + (count === 0 ? ' zero' : '');
+    });
   }
 
   // Persisted inspection results
@@ -390,6 +463,9 @@
       // No changes — apply stored results without re-inspecting
       inspectionData = stored;
       applyStoredInspection(stored);
+      updateFilterCounts();
+      refreshDetailHeader();
+      renderMissingRanges();
       return;
     }
 
@@ -436,6 +512,10 @@
     hideProgress();
     if (!gridLoadAbort) {
       saveInspection(suspectPages, thumbs);
+      inspectionData = { count: capturedPageNums.length, suspectPages: suspectPages, thumbs: thumbs, timestamp: Date.now() };
+      updateFilterCounts();
+      refreshDetailHeader();
+      renderMissingRanges();
       if (suspectPages.length > 0) {
         showToast(suspectPages.length + '개 빈 페이지 의심 감지됨');
       }
@@ -487,6 +567,17 @@
     });
   }
 
+  // Blank detection settings (loaded from chrome.storage)
+  var blankSettings = { threshold: 245, ratio: 0.98 };
+
+  function loadBlankSettings() {
+    chrome.storage.local.get({ blankThreshold: 245, blankRatio: 98 }, function (d) {
+      blankSettings.threshold = d.blankThreshold;
+      blankSettings.ratio = d.blankRatio / 100;
+    });
+  }
+  loadBlankSettings();
+
   function checkBlankFromData(dataURL) {
     return new Promise(function (resolve) {
       var img = new Image();
@@ -497,11 +588,12 @@
           c.width = size; c.height = size;
           c.getContext('2d').drawImage(img, 0, 0, size, size);
           var data = c.getContext('2d').getImageData(0, 0, size, size).data;
+          var thr = blankSettings.threshold;
           var whiteCount = 0;
           for (var i = 0; i < data.length; i += 4) {
-            if (data[i] > 245 && data[i + 1] > 245 && data[i + 2] > 245) whiteCount++;
+            if (data[i] > thr && data[i + 1] > thr && data[i + 2] > thr) whiteCount++;
           }
-          resolve(whiteCount / (size * size) > 0.98);
+          resolve(whiteCount / (size * size) > blankSettings.ratio);
         } catch (e) { resolve(false); }
       };
       img.onerror = function () { resolve(false); };
@@ -778,6 +870,13 @@
     var cachedCount = capturedPageNums.length;
     var isComplete = totalPages > 0 && cachedCount >= totalPages;
 
+    // Hide scan card when complete + disconnected (avoids duplicate with complete-badge)
+    if (isComplete && state !== 'active' && state !== 'recovering' && state !== 'connected') {
+      $('scanCard').hidden = true;
+      return;
+    }
+    $('scanCard').hidden = false;
+
     if (isComplete && state !== 'active' && state !== 'recovering') {
       dot.className = 'scan-dot complete';
       text.textContent = '스캔 완료';
@@ -870,24 +969,69 @@
     }
     if (rangeStart > 0) ranges.push({ start: rangeStart, end: totalPages });
 
-    if (ranges.length === 0) { section.hidden = true; return; }
+    // Find contiguous suspect ranges
+    var suspectPages = inspectionData && inspectionData.suspectPages ? inspectionData.suspectPages : [];
+    var suspectSet = {};
+    suspectPages.forEach(function (n) { suspectSet[n] = true; });
+
+    var suspectRanges = [];
+    var sStart = 0;
+    var sortedSuspect = suspectPages.slice().sort(function (a, b) { return a - b; });
+    for (var si = 0; si < sortedSuspect.length; si++) {
+      var sp = sortedSuspect[si];
+      if (sStart === 0) {
+        sStart = sp;
+      } else if (sp !== sortedSuspect[si - 1] + 1) {
+        suspectRanges.push({ start: sStart, end: sortedSuspect[si - 1] });
+        sStart = sp;
+      }
+    }
+    if (sStart > 0 && sortedSuspect.length > 0) {
+      suspectRanges.push({ start: sStart, end: sortedSuspect[sortedSuspect.length - 1] });
+    }
+
+    var hasMissing = ranges.length > 0;
+    var hasSuspect = suspectRanges.length > 0;
+
+    if (!hasMissing && !hasSuspect) { section.hidden = true; return; }
 
     section.hidden = false;
-    var totalMissing = 0;
-    ranges.forEach(function (r) { totalMissing += r.end - r.start + 1; });
-    $('missingLabel').textContent = '누락 구간 (' + totalMissing + '페이지, ' + ranges.length + '구간)';
 
     var html = '';
-    for (var i = 0; i < ranges.length; i++) {
-      var r = ranges[i];
-      var count = r.end - r.start + 1;
-      var label = r.start === r.end ? r.start + 'p' : r.start + '-' + r.end + 'p';
-      html += '<div class="missing-range">' +
-        '<span class="range-text">' + label + '</span>' +
-        '<span class="range-count">' + count + '개</span>' +
-        '<button class="range-rescan" data-start="' + r.start + '" data-end="' + r.end + '">재스캔</button>' +
-      '</div>';
+
+    // Missing ranges
+    if (hasMissing) {
+      var totalMissing = 0;
+      ranges.forEach(function (r) { totalMissing += r.end - r.start + 1; });
+      html += '<div class="range-section-label missing-label">누락 ' + totalMissing + '페이지 · ' + ranges.length + '구간</div>';
+      for (var i = 0; i < ranges.length; i++) {
+        var r = ranges[i];
+        var count = r.end - r.start + 1;
+        var label = r.start === r.end ? r.start + 'p' : r.start + '-' + r.end + 'p';
+        html += '<div class="missing-range">' +
+          '<span class="range-text">' + label + '</span>' +
+          '<span class="range-count">' + count + '개</span>' +
+          '<button class="range-rescan" data-start="' + r.start + '" data-end="' + r.end + '">재스캔</button>' +
+        '</div>';
+      }
     }
+
+    // Suspect ranges
+    if (hasSuspect) {
+      html += '<div class="range-section-label suspect-label">의심 ' + suspectPages.length + '페이지 · ' + suspectRanges.length + '구간</div>';
+      for (var j = 0; j < suspectRanges.length; j++) {
+        var sr = suspectRanges[j];
+        var scount = sr.end - sr.start + 1;
+        var slabel = sr.start === sr.end ? sr.start + 'p' : sr.start + '-' + sr.end + 'p';
+        html += '<div class="missing-range suspect-range">' +
+          '<span class="range-text">' + slabel + '</span>' +
+          '<span class="range-count">' + scount + '개</span>' +
+          '<button class="range-rescan" data-start="' + sr.start + '" data-end="' + sr.end + '">재스캔</button>' +
+        '</div>';
+      }
+    }
+
+    $('missingLabel').textContent = '누락 · 의심 구간';
     $('missingRanges').innerHTML = html;
 
     // Bind rescan buttons

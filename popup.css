@@ -66,6 +66,17 @@ header {
 .status-banner .dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
+.status-banner .banner-content { display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+.status-banner .banner-detail {
+  font-size: 11px; font-weight: 500; opacity: 0.7;
+  max-height: 0; overflow: hidden; transition: max-height .2s ease, margin .2s ease;
+  margin-top: 0;
+}
+.status-banner.hoverable { cursor: default; transition: all .2s ease; }
+.status-banner.hoverable:hover .banner-detail {
+  max-height: 24px; margin-top: 3px;
+}
+
 .dot.green { background: #34c759; }
 .dot.orange { background: #ff9500; animation: pulse 1.5s infinite; }
 .dot.red { background: #ff3b30; }
@@ -200,6 +211,15 @@ header {
 }
 .delay-input:focus { border-color: #e94560; }
 .delay-sep { color: #86868b; }
+.setting-sub { font-size: 11px; color: #86868b; min-width: 72px; flex-shrink: 0; }
+.select-input-sm {
+  flex: 1; padding: 7px 28px 7px 10px; border: 1px solid #d2d2d7; border-radius: 8px;
+  background: #fff; font-size: 12px; color: #1d1d1f; cursor: pointer; outline: none;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2386868b' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+.select-input-sm:focus { border-color: #e94560; }
 .info-text { font-size: 11.5px; color: #86868b; line-height: 1.7; }
 .info-text p { margin-bottom: 4px; }
 .info-text p:last-child { margin-bottom: 0; }

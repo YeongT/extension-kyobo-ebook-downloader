@@ -6,6 +6,46 @@
   // Bypasses all detection layers, captures canvas, generates PDF
   // ============================================================
 
+  // ── 0. High-resolution capture: Override devicePixelRatio ──
+  // The viewer (PDF.js-based) reads window.devicePixelRatio to size its canvas.
+  // canvas.width = CSS너비 × DPR → higher DPR = more pixels = sharper text/vectors.
+  // Defaults: 3× DPR + PNG (lossless). Settings synced via localStorage by content.js.
+  var _nativeDPR = window.devicePixelRatio || 1;
+  var _captureDPR = 3;
+  var _captureFormat = 'image/png';
+  var _captureQuality = 0.92;
+  try {
+    var storedDPR = localStorage.getItem('kyobo_ext_dpr');
+    if (storedDPR !== null && storedDPR !== '') {
+      var parsedDPR = parseFloat(storedDPR);
+      if (parsedDPR >= 1 && parsedDPR <= 6) _captureDPR = parsedDPR;
+    }
+    var storedFmt = localStorage.getItem('kyobo_ext_format');
+    if (storedFmt === 'jpeg') {
+      _captureFormat = 'image/jpeg';
+    }
+    var storedQ = localStorage.getItem('kyobo_ext_quality');
+    if (storedQ !== null && storedQ !== '') {
+      var pq = parseFloat(storedQ);
+      if (pq > 0 && pq <= 1) _captureQuality = pq;
+    }
+  } catch (e) {}
+  // Always override DPR via getter (PDF.js reads this on every render)
+  Object.defineProperty(window, 'devicePixelRatio', {
+    get: function () { return _captureDPR; },
+    configurable: true
+  });
+
+  // Live update: content.js sends this when user changes settings in popup
+  // → updates DPR + triggers viewer re-render immediately (no reload needed)
+  function _handleLiveDPRUpdate(newDPR, newFormat, newQuality) {
+    if (newDPR >= 1 && newDPR <= 6) _captureDPR = newDPR;
+    if (newFormat) _captureFormat = newFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
+    if (newQuality > 0 && newQuality <= 1) _captureQuality = newQuality;
+    // Trigger viewer re-render: PDF.js listens to resize and re-reads DPR
+    window.dispatchEvent(new Event('resize'));
+  }
+
   var ALLOWED_ORIGIN = location.origin;
 
   // Incremental PDF building
@@ -727,7 +767,9 @@
     if (c.width === 0 || c.height === 0) return { ok: false, error: 'canvas_empty' };
     removeWatermarks();
     try {
-      var dataURL = c.toDataURL('image/png');
+      var dataURL = (_captureFormat === 'image/jpeg')
+        ? c.toDataURL('image/jpeg', _captureQuality)
+        : c.toDataURL('image/png');
       if (!dataURL || dataURL.length < 1000) return { ok: false, error: 'canvas_blank' };
       var dims = calcPageDims(c.width, c.height, pdfTargetSize);
       if (capturedCount > 0) pdfDocument.addPage([dims.pageW, dims.pageH], dims.pageW > dims.pageH ? 'landscape' : 'portrait');
@@ -810,7 +852,9 @@
         if (cpC.width === 0 || cpC.height === 0) { resp.data = { ok: false, error: 'canvas_empty' }; send(); break; }
         removeWatermarks();
         try {
-          var cpURL = cpC.toDataURL('image/png');
+          var cpURL = (_captureFormat === 'image/jpeg')
+            ? cpC.toDataURL('image/jpeg', _captureQuality)
+            : cpC.toDataURL('image/png');
           if (!cpURL || cpURL.length < 1000) { resp.data = { ok: false, error: 'canvas_blank' }; send(); break; }
           var cpPN = event.data.pageNum || 0;
           var cpBid = getBookId();
@@ -975,6 +1019,21 @@
           send();
         }).catch(function () { resp.data = []; send(); });
         break;
+      case 'getCaptureDPR':
+        var crc2 = findCanvas();
+        resp.data = {
+          dpr: _captureDPR, nativeDPR: _nativeDPR, format: _captureFormat, quality: _captureQuality,
+          canvasW: crc2 ? crc2.width : 0, canvasH: crc2 ? crc2.height : 0
+        };
+        send(); break;
+      case 'updateCaptureSettings':
+        _handleLiveDPRUpdate(
+          event.data.dpr || _captureDPR,
+          event.data.format || null,
+          event.data.quality || 0
+        );
+        resp.data = { dpr: _captureDPR, format: _captureFormat };
+        send(); break;
       case 'ping': resp.data = 'pong'; send(); break;
       default: resp.error = 'Unknown action'; send();
     }

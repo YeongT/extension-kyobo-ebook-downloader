@@ -60,22 +60,35 @@
       var cachedBooks = [];
       try { cachedBooks = await extGetAllBooks(); } catch (e) {}
 
+      var loanTitles = {};
+      var newCount = 0;
+      var cachedCount = 0;
       var listHtml = '';
       for (var i = 0; i < books.length; i++) {
         var book = books[i];
+        loanTitles[book.title] = true;
         var cached = findCachedBook(cachedBooks, book.title);
+        if (cached && cached.cachedCount > 0) { cachedCount++; } else { newCount++; }
         listHtml += renderBookItem(book, cached);
       }
 
+      var bannerDetail = '';
+      if (newCount > 0 || cachedCount > 0) {
+        var parts = [];
+        if (newCount > 0) parts.push('신규 ' + newCount);
+        if (cachedCount > 0) parts.push('캐시 ' + cachedCount);
+        bannerDetail = '<div class="banner-detail">' + parts.join(' · ') + '</div>';
+      }
+
       content.innerHTML =
-        '<div class="status-banner info"><span class="dot green"></span>대출 도서 ' + books.length + '권</div>' +
+        '<div class="status-banner info hoverable"><span class="dot green"></span><div class="banner-content"><span>대출 도서 ' + books.length + '권</span>' + bannerDetail + '</div></div>' +
         '<div class="book-list">' + listHtml + '</div>';
 
       content.querySelectorAll('[data-action]').forEach(function (btn) {
         btn.addEventListener('click', handleBookAction);
       });
 
-      await renderCachedBooks(content);
+      await renderCachedBooks(content, loanTitles);
     } catch (e) {
       content.innerHTML += '<div class="empty">도서 목록 로드 실패<br><small>' + esc(e.message) + '</small></div>';
       await renderCachedBooks(content);
@@ -105,7 +118,15 @@
 
     var actionsHtml = '';
     if (book.hasWebViewer) {
-      actionsHtml += '<button class="btn btn-primary" data-action="openSession" data-title="' + escAttr(book.title) + '">세션 관리</button>';
+      if (cached && cached.cachedCount > 0) {
+        var isComplete = cached.totalPages > 0 && cached.cachedCount >= cached.totalPages;
+        if (isComplete) {
+          actionsHtml += '<button class="btn btn-primary" data-action="openReader" data-bookid="' + escAttr(cached.bookId) + '">보기</button>';
+        }
+        actionsHtml += '<button class="btn btn-secondary" data-action="openInSessions" data-bookid="' + escAttr(cached.bookId) + '">세션 관리</button>';
+      } else {
+        actionsHtml += '<button class="btn btn-primary" data-action="openSession" data-title="' + escAttr(book.title) + '">새 세션 시작</button>';
+      }
     }
 
     var authorHtml = book.author
@@ -180,7 +201,7 @@
         '<div class="progress-bar"><div class="progress-fill" id="capFill"></div></div>' +
         '<div class="progress-text" id="capText">진행 중...</div>' +
         '<div class="capture-actions">' +
-          '<button class="btn btn-secondary" data-action="openSession" data-title="' + escAttr(title) + '">세션 관리자</button>' +
+          '<button class="btn btn-secondary" data-action="openSession" data-title="' + escAttr(title) + '">세션 관리</button>' +
         '</div>' +
       '</div>';
 
@@ -200,7 +221,7 @@
         '<div class="capture-title">' + esc(title) + '</div>' +
         '<div style="font-size:12px;color:#86868b;margin-bottom:12px">' + total + '페이지</div>' +
         '<div class="capture-actions">' +
-          '<button class="btn btn-primary" data-action="openSession" data-title="' + escAttr(title) + '">세션 관리자</button>' +
+          '<button class="btn btn-primary" data-action="openSession" data-title="' + escAttr(title) + '">세션 관리</button>' +
         '</div>' +
       '</div>';
 
@@ -227,12 +248,17 @@
   }
 
   // ── Cached Books Section ──
-  async function renderCachedBooks(container) {
+  async function renderCachedBooks(container, excludeTitles) {
     try {
       var books = await extGetAllBooks();
       if (!books || books.length === 0) return;
 
       books.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+
+      if (excludeTitles) {
+        books = books.filter(function (b) { return !excludeTitles[b.title]; });
+        if (books.length === 0) return;
+      }
 
       var html = '<div class="section-title" style="margin-top:14px">캐시된 도서</div><div class="card">';
       for (var i = 0; i < books.length; i++) {
@@ -284,11 +310,22 @@
 
   // ── Settings ──
   function loadSettings() {
-    chrome.storage.local.get({ autoRetry: true, autoRetryBlank: false, pageDelayMin: 800, pageDelayMax: 1500 }, function (d) {
+    chrome.storage.local.get({
+      autoRetry: true, autoRetryBlank: false,
+      pageDelayMin: 800, pageDelayMax: 1500,
+      blankThreshold: 245, blankRatio: 98,
+      captureDPR: 3, captureFormat: 'png', captureQuality: 92
+    }, function (d) {
       $('autoRetry').checked = d.autoRetry !== false;
       $('autoRetryBlank').checked = !!d.autoRetryBlank;
       $('sPageDelayMin').value = d.pageDelayMin;
       $('sPageDelayMax').value = d.pageDelayMax;
+      $('sBlankThreshold').value = d.blankThreshold;
+      $('sBlankRatio').value = d.blankRatio;
+      $('sCaptureDPR').value = d.captureDPR;
+      $('sCaptureFormat').value = d.captureFormat;
+      $('sCaptureQuality').value = d.captureQuality;
+      toggleQualityRow();
     });
   }
 
@@ -297,17 +334,31 @@
       autoRetry: $('autoRetry').checked,
       autoRetryBlank: $('autoRetryBlank').checked,
       pageDelayMin: parseInt($('sPageDelayMin').value, 10) || 800,
-      pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500
+      pageDelayMax: parseInt($('sPageDelayMax').value, 10) || 1500,
+      blankThreshold: Math.min(255, Math.max(200, parseInt($('sBlankThreshold').value, 10) || 245)),
+      blankRatio: Math.min(100, Math.max(50, parseInt($('sBlankRatio').value, 10) || 98)),
+      captureDPR: parseInt($('sCaptureDPR').value, 10) || 3,
+      captureFormat: $('sCaptureFormat').value || 'png',
+      captureQuality: Math.min(100, Math.max(50, parseInt($('sCaptureQuality').value, 10) || 92))
     });
   }
 
-  ['sPageDelayMin', 'sPageDelayMax'].forEach(function (id) {
+  function toggleQualityRow() {
+    var isJpeg = $('sCaptureFormat').value === 'jpeg';
+    $('qualityRow').style.display = isJpeg ? '' : 'none';
+  }
+
+  ['sPageDelayMin', 'sPageDelayMax', 'sBlankThreshold', 'sBlankRatio', 'sCaptureQuality'].forEach(function (id) {
     var el = $(id);
     if (el) el.addEventListener('change', saveSettings);
   });
   ['autoRetry', 'autoRetryBlank'].forEach(function (id) {
     var el = $(id);
     if (el) el.addEventListener('change', saveSettings);
+  });
+  ['sCaptureDPR', 'sCaptureFormat'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener('change', function () { toggleQualityRow(); saveSettings(); });
   });
 
   // ── Helpers ──

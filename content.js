@@ -1253,10 +1253,38 @@
     }
   }
 
+  // ── Sync high-res capture settings to localStorage (for inject.js on next load) ──
+  function syncCaptureSettings() {
+    chrome.storage.local.get({ captureDPR: 3, captureFormat: 'png', captureQuality: 92 }, function (d) {
+      try {
+        localStorage.setItem('kyobo_ext_dpr', String(d.captureDPR || 3));
+        localStorage.setItem('kyobo_ext_format', d.captureFormat || 'png');
+        localStorage.setItem('kyobo_ext_quality', String((d.captureQuality || 92) / 100));
+      } catch (e) {}
+    });
+  }
+  // Re-sync when settings change + live-update the running viewer
+  chrome.storage.onChanged.addListener(function (changes) {
+    if (changes.captureDPR || changes.captureFormat || changes.captureQuality) {
+      syncCaptureSettings();
+      // Send live update to inject.js (MAIN world) → immediate re-render
+      chrome.storage.local.get({ captureDPR: 3, captureFormat: 'png', captureQuality: 92 }, function (d) {
+        callInject('updateCaptureSettings', {
+          dpr: d.captureDPR || 3,
+          format: d.captureFormat || 'png',
+          quality: (d.captureQuality || 92) / 100
+        }).then(function () {
+          showToast('캡처 설정 적용됨 (DPR ' + (d.captureDPR || 3) + 'x)', 3000);
+        }).catch(function () {});
+      });
+    }
+  });
+
   // ── Init ──
   if (checkInvalidUse()) {
     // On /invalidUse page - skip normal init, just handle recovery
   } else {
+    syncCaptureSettings();
     createOverlay();
     checkPendingSession();
     setTimeout(function () {
