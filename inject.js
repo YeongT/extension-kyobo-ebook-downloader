@@ -281,27 +281,40 @@
     configurable: true
   });
 
-  // ── 3b. Find content canvas ──
-  function findCanvas() {
-    var c = document.querySelector('.canvasLayer canvas');
-    if (c) return c;
-    var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
-    for (var i = 0; i < pages.length; i++) {
-      c = pages[i].querySelector('.canvasLayer canvas');
-      if (c) return c;
-    }
-    return document.querySelector('#content canvas, .mid_zone canvas');
+  // ── 3b. Check if a pdfPage element is visible in the viewport ──
+  function isPageVisible(pageEl) {
+    var rect = pageEl.getBoundingClientRect();
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+    // Page must overlap the viewport by at least 10% of its own size
+    var overlapH = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
+    var overlapW = Math.min(rect.right, vw) - Math.max(rect.left, 0);
+    return overlapH > rect.height * 0.1 && overlapW > rect.width * 0.1;
   }
 
-  // Find all rendered canvases with actual content (not blank)
+  // ── 3c. Find content canvas (visible in viewport only) ──
+  function findCanvas() {
+    var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
+    for (var i = 0; i < pages.length; i++) {
+      if (!isPageVisible(pages[i])) continue;
+      var c = pages[i].querySelector('.canvasLayer canvas');
+      if (!c) c = pages[i].querySelector('canvas');
+      if (c && c.width > 0 && c.height > 0) return c;
+    }
+    // Fallback: any canvas
+    return document.querySelector('.canvasLayer canvas') ||
+           document.querySelector('#content canvas, .mid_zone canvas');
+  }
+
+  // Find all rendered canvases that are VISIBLE in the viewport (not pre-rendered)
   function findAllCanvases() {
     var result = [];
     var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
     for (var i = 0; i < pages.length; i++) {
+      if (!isPageVisible(pages[i])) continue;
       var c = pages[i].querySelector('.canvasLayer canvas');
       if (!c) c = pages[i].querySelector('canvas');
       if (c && c.width > 0 && c.height > 0) {
-        // Verify canvas has actual content by sampling pixels
         if (isCanvasBlank(c)) continue;
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
         var pageNum = idMatch ? parseInt(idMatch[1], 10) : 0;
