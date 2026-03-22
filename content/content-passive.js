@@ -4,6 +4,7 @@
   C._passiveCapturing = false;
   C._passiveCachedSet = null;
   C._passiveSuspectSet = null;
+  C._passiveTitle = null;
   var _lastDetectedPage = 0;
   var _pollTimer = null;
 
@@ -74,6 +75,7 @@
       }
 
       // Load suspect pages from inspection results
+      C._passiveTitle = title;
       C._passiveSuspectSet = await loadSuspectSet(bookId, title);
     } catch (e) {}
   };
@@ -93,6 +95,20 @@
             return;
           }
           _lastDetectedPage = curPage;
+
+          // Refresh cached + suspect sets on each page flip (catches session manager deletes)
+          try {
+            var freshPages = await new Promise(function (resolve) {
+              chrome.runtime.sendMessage({ target: 'background', action: 'getPagesInfo', bookId: C.getBookId() }, function (r) {
+                void chrome.runtime.lastError; resolve(r);
+              });
+            });
+            if (freshPages && freshPages.pages) {
+              C._passiveCachedSet = {};
+              freshPages.pages.forEach(function (p) { C._passiveCachedSet[p] = true; });
+            }
+          } catch (e) {}
+          C._passiveSuspectSet = await loadSuspectSet(C.getBookId(), C._passiveTitle);
 
           // Only capture if: uncached OR suspect
           var suspect = C._passiveSuspectSet || {};
