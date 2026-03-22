@@ -360,10 +360,28 @@
           break;
         }
 
+        // Remember current page numbers before flipping
+        var prevPages = [];
+        try { prevPages = await C.callInject('getRenderedPageNums'); } catch (e) {}
+
         // Flip to next page
         try { await C.callInject('nextPage'); } catch (e) {}
-        await C.waitCanvasReady(2000);
-        await C.delay(100);
+
+        // Wait until rendered pages actually change (not just canvas exists)
+        var flipDeadline = Date.now() + 5000;
+        var pageChanged = false;
+        while (Date.now() < flipDeadline) {
+          try {
+            var nowPages = await C.callInject('getRenderedPageNums');
+            if (nowPages && nowPages.length > 0 && JSON.stringify(nowPages) !== JSON.stringify(prevPages)) {
+              pageChanged = true;
+              break;
+            }
+          } catch (e) {}
+          await C.delay(150);
+        }
+        // Extra settle time for canvas rendering after page change
+        if (pageChanged) await C.delay(200);
 
         if (C.liveSettings.stealth) {
           await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
