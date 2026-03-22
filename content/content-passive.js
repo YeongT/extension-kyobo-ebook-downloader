@@ -9,22 +9,40 @@
 
   function loadSuspectSet(bookId, title) {
     return new Promise(function (resolve) {
-      // Find inspection_ key matching this book
-      chrome.storage.local.get(null, function (all) {
+      // Try direct key lookups first, then scan all as fallback
+      var candidates = ['inspection_' + bookId];
+      if (title) {
+        var titleId = 'title:' + title;
+        if (titleId !== bookId) candidates.push('inspection_' + titleId);
+        if (title !== bookId && title !== titleId) candidates.push('inspection_' + title);
+      }
+
+      chrome.storage.local.get(candidates, function (d) {
         var set = {};
-        Object.keys(all).forEach(function (k) {
-          if (k.indexOf('inspection_') !== 0) return;
-          var keyId = k.substring('inspection_'.length);
-          if (keyId === bookId ||
-              (title && keyId === 'title:' + title) ||
-              (title && keyId === title)) {
-            var data = all[k];
-            if (data && data.suspectPages) {
-              data.suspectPages.forEach(function (p) { set[p] = true; });
-            }
+        var found = false;
+        candidates.forEach(function (k) {
+          var data = d[k];
+          if (data && data.suspectPages && data.suspectPages.length > 0) {
+            data.suspectPages.forEach(function (p) { set[p] = true; });
+            found = true;
           }
         });
-        resolve(set);
+
+        if (found) { resolve(set); return; }
+
+        // Fallback: scan ALL inspection_ keys (handles any key format mismatch)
+        chrome.storage.local.get(null, function (all) {
+          Object.keys(all).forEach(function (k) {
+            if (k.indexOf('inspection_') !== 0) return;
+            var data = all[k];
+            if (!data || !data.suspectPages) return;
+            // Match if the key contains the title string
+            if (title && k.indexOf(title) !== -1) {
+              data.suspectPages.forEach(function (p) { set[p] = true; });
+            }
+          });
+          resolve(set);
+        });
       });
     });
   }
