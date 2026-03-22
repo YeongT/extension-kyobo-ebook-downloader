@@ -7,19 +7,25 @@
   var _lastDetectedPage = 0;
   var _pollTimer = null;
 
-  function loadConfirmedSet(bookId) {
+  function loadConfirmedSet(bookId, title) {
     return new Promise(function (resolve) {
-      if (!bookId) { resolve({}); return; }
-      // Try both the exact bookId and title: prefix variant
-      var keys = ['confirmed_' + bookId];
-      var titleKey = bookId.indexOf('title:') === 0 ? null : 'confirmed_title:' + bookId;
-      if (titleKey) keys.push(titleKey);
-      chrome.storage.local.get(keys, function (d) {
+      // Get ALL storage and find any confirmed_ key matching this book
+      chrome.storage.local.get(null, function (all) {
         var set = {};
-        keys.forEach(function (k) {
-          var arr = d[k] || [];
-          arr.forEach(function (p) { set[p] = true; });
+        var candidates = Object.keys(all).filter(function (k) {
+          return k.indexOf('confirmed_') === 0;
         });
+        for (var i = 0; i < candidates.length; i++) {
+          var k = candidates[i];
+          var keyBookId = k.substring('confirmed_'.length);
+          // Match by exact bookId, or by title in key
+          if (keyBookId === bookId ||
+              (title && keyBookId === 'title:' + title) ||
+              (title && keyBookId === title)) {
+            var arr = all[k] || [];
+            arr.forEach(function (p) { set[p] = true; });
+          }
+        }
         resolve(set);
       });
     });
@@ -51,8 +57,8 @@
         extPages.pages.forEach(function (p) { C._passiveCachedSet[p] = true; });
       }
 
-      // Load confirmed-normal pages
-      C._passiveConfirmedSet = await loadConfirmedSet(bookId);
+      // Load confirmed-normal pages (try all key variants)
+      C._passiveConfirmedSet = await loadConfirmedSet(bookId, title);
     } catch (e) {}
   };
 
