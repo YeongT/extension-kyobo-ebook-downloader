@@ -343,15 +343,25 @@
     if (pageInfoInterval) clearInterval(pageInfoInterval);
     pageInfoInterval = setInterval(function () {
       if (!C.overlayRoot) return;
-      C.callInject('getPageInfo').then(function (info) {
+      Promise.all([
+        C.callInject('getPageInfo'),
+        C.callInject('getRenderedPageNums')
+      ]).then(function (results) {
+        var info = results[0];
+        var rendered = results[1];
         if (!info) return;
         var pill = C.overlayRoot.getElementById('oPillPage');
         var inp = C.overlayRoot.getElementById('oPageInput');
         var tot = C.overlayRoot.getElementById('oPageTotal');
         var re = C.overlayRoot.getElementById('oRangeEnd');
-        if (pill) pill.textContent = (info.current || '-') + '/' + (info.total || '-');
+        // Show rendered pages in pill (e.g. "5,6/306" in 2-page view)
+        var pageLabel = (info.current || '-');
+        if (rendered && rendered.length > 1) {
+          pageLabel = rendered.join(',');
+        }
+        if (pill) pill.textContent = pageLabel + '/' + (info.total || '-');
         if (tot) tot.textContent = '/ ' + (info.total || '-');
-        if (inp && !oPageInputFocused) inp.value = info.current || 1;
+        if (inp && !oPageInputFocused) inp.value = (rendered && rendered.length > 0) ? rendered[0] : (info.current || 1);
         // Auto-fill range with smart defaults on first load
         if (re && !C.oRangeEndFocused && re.value === '1' && info.total > 1) {
           re.value = info.total;
