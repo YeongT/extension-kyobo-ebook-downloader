@@ -3,29 +3,27 @@
 
   C._passiveCapturing = false;
   C._passiveCachedSet = null;
-  C._passiveConfirmedSet = null;
+  C._passiveSuspectSet = null;
   var _lastDetectedPage = 0;
   var _pollTimer = null;
 
-  function loadConfirmedSet(bookId, title) {
+  function loadSuspectSet(bookId, title) {
     return new Promise(function (resolve) {
-      // Get ALL storage and find any confirmed_ key matching this book
+      // Find inspection_ key matching this book
       chrome.storage.local.get(null, function (all) {
         var set = {};
-        var candidates = Object.keys(all).filter(function (k) {
-          return k.indexOf('confirmed_') === 0;
-        });
-        for (var i = 0; i < candidates.length; i++) {
-          var k = candidates[i];
-          var keyBookId = k.substring('confirmed_'.length);
-          // Match by exact bookId, or by title in key
-          if (keyBookId === bookId ||
-              (title && keyBookId === 'title:' + title) ||
-              (title && keyBookId === title)) {
-            var arr = all[k] || [];
-            arr.forEach(function (p) { set[p] = true; });
+        Object.keys(all).forEach(function (k) {
+          if (k.indexOf('inspection_') !== 0) return;
+          var keyId = k.substring('inspection_'.length);
+          if (keyId === bookId ||
+              (title && keyId === 'title:' + title) ||
+              (title && keyId === title)) {
+            var data = all[k];
+            if (data && data.suspectPages) {
+              data.suspectPages.forEach(function (p) { set[p] = true; });
+            }
           }
-        }
+        });
         resolve(set);
       });
     });
@@ -57,8 +55,8 @@
         extPages.pages.forEach(function (p) { C._passiveCachedSet[p] = true; });
       }
 
-      // Load confirmed-normal pages (try all key variants)
-      C._passiveConfirmedSet = await loadConfirmedSet(bookId, title);
+      // Load suspect pages from inspection results
+      C._passiveSuspectSet = await loadSuspectSet(bookId, title);
     } catch (e) {}
   };
 
@@ -78,12 +76,20 @@
           }
           _lastDetectedPage = curPage;
 
+          // Only capture if: uncached OR suspect
+          var suspect = C._passiveSuspectSet || {};
+          var needsCapture = !C._passiveCachedSet[curPage] || suspect[curPage];
+          var needsCaptureNext = !C._passiveCachedSet[curPage + 1] || suspect[curPage + 1];
+          if (!needsCapture && !needsCaptureNext) {
+            poll();
+            return;
+          }
+
           C._passiveCapturing = true;
           await C.delay(400);
           await C.waitCanvasReady(3000);
           await C.delay(200);
 
-          var confirmed = C._passiveConfirmedSet || {};
           var results = null;
           try { results = await C.callInject('captureBothPages'); } catch (e) {}
 
@@ -91,28 +97,32 @@
             for (var i = 0; i < results.length; i++) {
               var r = results[i];
               if (!r || !r.ok || !r.pageNum) continue;
-              if (confirmed[r.pageNum]) continue;
-              var isNew = !C._passiveCachedSet[r.pageNum];
+              // Skip pages that are already cached AND not suspect
+              var isUncached = !C._passiveCachedSet[r.pageNum];
+              var isSuspect = suspect[r.pageNum];
+              if (!isUncached && !isSuspect) continue;
               C._passiveCachedSet[r.pageNum] = true;
+              if (isSuspect) delete suspect[r.pageNum];
               if (r.dataURL) {
                 await C.cachePageAsync(C.getBookId(), r.pageNum, r.dataURL, r.width, r.height);
                 r.dataURL = null;
               }
               C.notifyPopup('passiveCapture', { page: r.pageNum, bookId: C.getBookId() });
-              C.showStackToast(r.pageNum + 'p ' + (isNew ? '캡처됨' : '재캡처됨'), 2500);
+              C.showStackToast(r.pageNum + 'p ' + (isSuspect ? '재캡처됨' : '캡처됨'), 2500);
             }
           } else {
-            if (!confirmed[curPage]) {
+            if (needsCapture) {
               var result = await C.callInject('capturePageOnly', { pageNum: curPage });
               if (result && result.ok) {
-                var wasNew = !C._passiveCachedSet[curPage];
+                var wasSuspect = suspect[curPage];
                 C._passiveCachedSet[curPage] = true;
+                if (wasSuspect) delete suspect[curPage];
                 if (result.dataURL) {
                   await C.cachePageAsync(C.getBookId(), result.pageNum, result.dataURL, result.width, result.height);
                   result.dataURL = null;
                 }
                 C.notifyPopup('passiveCapture', { page: curPage, bookId: C.getBookId() });
-                C.showStackToast(curPage + 'p ' + (wasNew ? '캡처됨' : '재캡처됨'), 2500);
+                C.showStackToast(curPage + 'p ' + (wasSuspect ? '재캡처됨' : '캡처됨'), 2500);
               }
             }
           }
