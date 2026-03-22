@@ -1,5 +1,5 @@
 // Service worker for Kyobo eBook PDF Downloader
-try { importScripts('cache-db.js'); } catch (e) {}
+try { importScripts('shared/cache-db.js'); } catch (e) {}
 
 var libraryTabId = null;
 var libraryOrigin = null;
@@ -34,7 +34,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       return false;
 
     case 'openReader':
-      var rUrl = chrome.runtime.getURL('reader.html');
+      var rUrl = chrome.runtime.getURL('reader/reader.html');
       if (msg.bookId) rUrl += '?book=' + encodeURIComponent(msg.bookId);
       chrome.tabs.create({ url: rUrl });
       sendResponse({ success: true });
@@ -42,11 +42,11 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
     case 'openSessions':
       (async function () {
-        var sUrl = chrome.runtime.getURL('sessions.html');
+        var sUrl = chrome.runtime.getURL('sessions/sessions.html');
         if (msg.title) sUrl += '?title=' + encodeURIComponent(msg.title);
         else if (msg.bookId) sUrl += '?book=' + encodeURIComponent(msg.bookId);
 
-        var baseUrl = chrome.runtime.getURL('sessions.html');
+        var baseUrl = chrome.runtime.getURL('sessions/sessions.html');
         var existing = await chrome.tabs.query({ url: baseUrl + '*' });
         if (existing.length > 0) {
           await chrome.tabs.update(existing[0].id, { url: sUrl, active: true });
@@ -124,7 +124,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     case 'showNotification':
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icon128.png',
+        iconUrl: 'assets/icon128.png',
         title: msg.title || '교보 eBook',
         message: msg.message || '',
         requireInteraction: !!msg.requireInteraction

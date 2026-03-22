@@ -270,8 +270,7 @@
     bookCountEl.textContent = books.length;
   }, 500);
 
-  function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-  function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  // esc, escAttr loaded from shared/utils.js
 
   async function renderBanner() {
     var books = getBookList();

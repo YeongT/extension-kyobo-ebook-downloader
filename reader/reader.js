@@ -534,7 +534,8 @@
     }
   }
 
-  function escHTML(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  // escHTML: use shared esc() from utils.js
+  var escHTML = (typeof esc === 'function') ? esc : function (s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
 
   // ── Chapter dropdown for PDF export ──
   function populateChapterDropdown() {
@@ -760,7 +761,7 @@
     try {
       if (!window.jspdf) {
         var s = document.createElement('script');
-        s.src = 'lib/jspdf.umd.min.js';
+        s.src = '../lib/jspdf.umd.min.js';
         document.head.appendChild(s);
         await new Promise(function (res, rej) { s.onload = res; s.onerror = rej; });
       }

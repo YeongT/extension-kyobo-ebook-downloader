@@ -121,7 +121,7 @@
             );
             if (doExport) {
               try {
-                var scriptUrl = chrome.runtime.getURL('merge_pdf.py');
+                var scriptUrl = chrome.runtime.getURL('assets/merge_pdf.py');
                 var a = document.createElement('a');
                 a.href = scriptUrl;
                 a.download = 'merge_pdf.py';
@@ -230,9 +230,9 @@
 
       // Include merge scripts (py + bat for one-click)
       try {
-        var pyResp = await fetch(chrome.runtime.getURL('merge_pdf.py'));
+        var pyResp = await fetch(chrome.runtime.getURL('assets/merge_pdf.py'));
         if (pyResp.ok) zip.file('merge_pdf.py', await pyResp.text());
-        var batResp = await fetch(chrome.runtime.getURL('merge_pdf.bat'));
+        var batResp = await fetch(chrome.runtime.getURL('assets/merge_pdf.bat'));
         if (batResp.ok) zip.file('PDF 생성.bat', await batResp.text());
       } catch (e) {}
 

@@ -968,7 +968,120 @@
     _refCanvasWidth = 0; _refCanvasHeight = 0;
   }
 
-  // ── 7b. Canvas fingerprint (detect content change after page navigation) ──
+  // ── 7b. Capture helpers (extracted from message handler) ──
+
+  function capturePageOnly(pageNum) {
+    var canvas = findCanvas();
+    if (!canvas) return Promise.reject(new Error('Canvas not found'));
+    if (canvas.width === 0 || canvas.height === 0) return Promise.resolve({ ok: false, error: 'canvas_empty' });
+    removeWatermarks();
+    try {
+      var dataURL = (_captureFormat === 'image/jpeg')
+        ? canvas.toDataURL('image/jpeg', _captureQuality)
+        : canvas.toDataURL('image/png');
+      if (!dataURL || dataURL.length < 1000) return Promise.resolve({ ok: false, error: 'canvas_blank' });
+      var bid = getBookId();
+      return cachePageData(bid, pageNum, dataURL, canvas.width, canvas.height).then(function () {
+        return { ok: true, dataURL: dataURL, width: canvas.width, height: canvas.height, pageNum: pageNum, bookId: bid, cached: true };
+      }).catch(function () {
+        return { ok: true, dataURL: dataURL, width: canvas.width, height: canvas.height, pageNum: pageNum, bookId: bid, cached: false };
+      });
+    } catch (e) { return Promise.reject(e); }
+  }
+
+  function captureBothPages() {
+    removeWatermarks();
+    var canvases = findAllCanvases();
+    if (canvases.length === 0) return Promise.resolve([]);
+    var bid = getBookId();
+    var promises = canvases.map(function (bc) {
+      try {
+        var url = (_captureFormat === 'image/jpeg')
+          ? bc.canvas.toDataURL('image/jpeg', _captureQuality)
+          : bc.canvas.toDataURL('image/png');
+        if (!url || url.length < 1000) return Promise.resolve({ ok: false, error: 'canvas_blank', pageNum: bc.pageNum });
+        return cachePageData(bid, bc.pageNum, url, bc.canvas.width, bc.canvas.height).then(function () {
+          return { ok: true, dataURL: url, width: bc.canvas.width, height: bc.canvas.height, pageNum: bc.pageNum, bookId: bid, cached: true };
+        }).catch(function () {
+          return { ok: true, dataURL: url, width: bc.canvas.width, height: bc.canvas.height, pageNum: bc.pageNum, bookId: bid, cached: false };
+        });
+      } catch (e) {
+        return Promise.resolve({ ok: false, error: e.message, pageNum: bc.pageNum });
+      }
+    });
+    return Promise.all(promises);
+  }
+
+  function getCacheInfoForCurrentBook() {
+    var bid = getBookId();
+    return Promise.all([getBookMeta(bid), getCachedPages(bid)]).then(function (r) {
+      if (r[1].length > 0) {
+        return { bookId: bid, hasCachedPages: true, cachedCount: r[1].length, cachedPageNums: r[1].map(function (p) { return p.pageNum; }), meta: r[0] };
+      }
+      var title = getPageInfo().title;
+      if (!title) return { bookId: bid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] };
+      var titleId = 'title:' + title;
+      var tryIds = titleId !== bid ? [titleId] : [];
+      return findBookIdByTitle(title).then(function (foundId) {
+        if (foundId && foundId !== bid && tryIds.indexOf(foundId) === -1) tryIds.push(foundId);
+        return (function tryNext(idx) {
+          if (idx >= tryIds.length) return { bookId: bid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] };
+          var altId = tryIds[idx];
+          return getCachedPages(altId).then(function (altPages) {
+            if (altPages.length > 0) {
+              return migrateBookCache(altId, bid).then(function () {
+                return Promise.all([getBookMeta(bid), getCachedPages(bid)]);
+              }).then(function (r2) {
+                return { bookId: bid, hasCachedPages: true, cachedCount: r2[1].length, cachedPageNums: r2[1].map(function (p) { return p.pageNum; }), meta: r2[0], migrated: true };
+              }).catch(function () {
+                return { bookId: altId, hasCachedPages: true, cachedCount: altPages.length, cachedPageNums: altPages.map(function (p) { return p.pageNum; }), meta: null };
+              });
+            }
+            return tryNext(idx + 1);
+          }).catch(function () { return tryNext(idx + 1); });
+        })(0);
+      }).catch(function () {
+        return { bookId: bid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] };
+      });
+    }).catch(function () { return { hasCachedPages: false, cachedCount: 0, cachedPageNums: [] }; });
+  }
+
+  function resolveBookIdFromTitle(title) {
+    if (!title) return Promise.resolve(getBookId());
+    var stableId = 'title:' + title;
+    return getCachedPages(stableId).then(function (stablePages) {
+      if (stablePages.length > 0) { resolvedBookId = stableId; return stableId; }
+      var urlId = location.pathname + location.search;
+      return getCachedPages(urlId).then(function (urlPages) {
+        if (urlPages.length > 0 && urlId !== stableId) {
+          return migrateBookCache(urlId, stableId).then(function () { resolvedBookId = stableId; return stableId; });
+        }
+        return findBookIdByTitle(title).then(function (foundId) {
+          if (foundId && foundId !== stableId) {
+            return migrateBookCache(foundId, stableId).then(function () { resolvedBookId = stableId; return stableId; });
+          }
+          resolvedBookId = stableId;
+          return stableId;
+        });
+      });
+    }).catch(function () { resolvedBookId = stableId; return stableId; });
+  }
+
+  function findBlankPagesInRange(startPage, endPage) {
+    return getCachedPages(getBookId()).then(function (allPages) {
+      var blanks = [];
+      allPages.forEach(function (pg) {
+        if (pg.pageNum < startPage || pg.pageNum > endPage) return;
+        if (!pg.dataURL || pg.dataURL.length < 2000) { blanks.push(pg.pageNum); return; }
+        var expectedMin = (pg.width || 100) * (pg.height || 100) * 0.01;
+        var actualSize = pg.dataURL.length * 0.75;
+        if (actualSize < expectedMin) blanks.push(pg.pageNum);
+      });
+      return blanks;
+    }).catch(function () { return []; });
+  }
+
+  // ── 7c. Canvas fingerprint (detect content change after page navigation) ──
   function getCanvasFingerprint() {
     var c = findCanvas();
     if (!c || c.width === 0 || c.height === 0) return '';
@@ -998,237 +1111,69 @@
     var resp = { source: 'KYOBO_INJECT', id: event.data.id };
     var send = function () { window.postMessage(resp, ALLOWED_ORIGIN); };
 
+    // Helper: route async handler results to response
+    var handle = function (promise) {
+      promise.then(function (d) { resp.data = d; send(); }).catch(function (e) { resp.error = e.message; send(); });
+    };
+
     switch (event.data.action) {
-      case 'getPageInfo': resp.data = getPageInfo(); send(); break;
+      // ── Sync queries ──
+      case 'getPageInfo':          resp.data = getPageInfo(); send(); break;
+      case 'getTOC':               resp.data = getTOC(); send(); break;
+      case 'getViewerPageNum':     resp.data = getViewerPageNum(); send(); break;
+      case 'getCapturedCount':     resp.data = capturedCount; send(); break;
+      case 'getCanvasFingerprint': resp.data = getCanvasFingerprint(); send(); break;
+      case 'ping':                 resp.data = 'pong'; send(); break;
       case 'getCanvasDimensions':
         var cv = findCanvas();
         resp.data = cv ? { width: cv.width, height: cv.height } : null; send(); break;
-      case 'initPDF':
-        initPDF(event.data.extensionBaseURL || '', event.data.targetSize || null).then(function () { resp.data = true; send(); }).catch(function (e) { resp.error = e.message; send(); }); break;
+      case 'canvasReady':
+        var crc = findCanvas();
+        resp.data = !!(crc && crc.width > 0 && crc.height > 0); send(); break;
+      case 'getCaptureDPR':
+        var crc2 = findCanvas();
+        resp.data = { dpr: _captureDPR, nativeDPR: _nativeDPR, format: _captureFormat, quality: _captureQuality, canvasW: crc2 ? crc2.width : 0, canvasH: crc2 ? crc2.height : 0 };
+        send(); break;
+      case 'updateCaptureSettings':
+        _handleLiveDPRUpdate(event.data.dpr || _captureDPR, event.data.format || null, event.data.quality || 0);
+        resp.data = { dpr: _captureDPR, format: _captureFormat }; send(); break;
+      case 'clearState':
+        clearState(); resp.data = true; send(); break;
       case 'captureAndAddToPDF':
         resp.data = captureAndAddToPDF(event.data.pageNum || 0); send(); break;
-      case 'capturePageOnly':
-        var cpC = findCanvas();
-        if (!cpC) { resp.error = 'Canvas not found'; send(); break; }
-        if (cpC.width === 0 || cpC.height === 0) { resp.data = { ok: false, error: 'canvas_empty' }; send(); break; }
-        removeWatermarks();
-        try {
-          var cpCanvas = cpC;
-          var cpURL = (_captureFormat === 'image/jpeg')
-            ? cpCanvas.toDataURL('image/jpeg', _captureQuality)
-            : cpCanvas.toDataURL('image/png');
-          if (!cpURL || cpURL.length < 1000) { resp.data = { ok: false, error: 'canvas_blank' }; send(); break; }
-          var cpPN = event.data.pageNum || 0;
-          var cpBid = getBookId();
-          cachePageData(cpBid, cpPN, cpURL, cpCanvas.width, cpCanvas.height).then(function () {
-            resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: true };
-            send();
-          }).catch(function () {
-            resp.data = { ok: true, dataURL: cpURL, width: cpCanvas.width, height: cpCanvas.height, pageNum: cpPN, bookId: cpBid, cached: false };
-            send();
-          });
-        } catch (cpE) { resp.error = cpE.message; send(); }
-        break;
-      case 'captureBothPages':
-        removeWatermarks();
-        var bothCanvases = findAllCanvases();
-        if (bothCanvases.length === 0) { resp.data = []; send(); break; }
-        var bothResults = [];
-        var bothBid = getBookId();
-        var bothDone = 0;
-        var bothTotal = bothCanvases.length;
-        for (var bi = 0; bi < bothCanvases.length; bi++) {
-          (function (bc, idx) {
-            try {
-              var outCanvas = bc.canvas;
-              var url = (_captureFormat === 'image/jpeg')
-                ? outCanvas.toDataURL('image/jpeg', _captureQuality)
-                : outCanvas.toDataURL('image/png');
-              if (!url || url.length < 1000) {
-                bothResults[idx] = { ok: false, error: 'canvas_blank', pageNum: bc.pageNum };
-                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
-                return;
-              }
-              cachePageData(bothBid, bc.pageNum, url, outCanvas.width, outCanvas.height).then(function () {
-                bothResults[idx] = { ok: true, dataURL: url, width: outCanvas.width, height: outCanvas.height, pageNum: bc.pageNum, bookId: bothBid, cached: true };
-                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
-              }).catch(function () {
-                bothResults[idx] = { ok: true, dataURL: url, width: outCanvas.width, height: outCanvas.height, pageNum: bc.pageNum, bookId: bothBid, cached: false };
-                if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
-              });
-            } catch (e) {
-              bothResults[idx] = { ok: false, error: e.message, pageNum: bc.pageNum };
-              if (++bothDone === bothTotal) { resp.data = bothResults; send(); }
-            }
-          })(bothCanvases[bi], bi);
-        }
-        break;
-      case 'getCapturedCount': resp.data = capturedCount; send(); break;
-      case 'clearState': clearState(); resp.data = true; send(); break;
-      case 'getTOC': resp.data = getTOC(); send(); break;
-      case 'getViewerPageNum': resp.data = getViewerPageNum(); send(); break;
-      case 'nextPage': clickNextPage().then(function (r) { resp.data = r; send(); }); break;
-      case 'prevPage': clickPrevPage().then(function (r) { resp.data = r; send(); }); break;
-      case 'goToPage':
-        Promise.resolve(goToPage(event.data.pageNum)).then(function (r) { resp.data = r; send(); }).catch(function () { resp.data = false; send(); });
-        break;
       case 'finalizePDF':
         try { resp.data = finalizePDF(event.data.title || 'ebook', event.data.toc || []); }
         catch (e) { resp.error = e.message; }
         send(); break;
-      case 'getCacheInfo':
-        var ciBid = getBookId();
-        Promise.all([getBookMeta(ciBid), getCachedPages(ciBid)]).then(function (r) {
-          if (r[1].length > 0) {
-            resp.data = { bookId: ciBid, hasCachedPages: true, cachedCount: r[1].length, cachedPageNums: r[1].map(function (p) { return p.pageNum; }), meta: r[0] };
-            send();
-            return;
-          }
-          // Fallback: search by title if no cache found under current bookId
-          var ciTitle = getPageInfo().title;
-          if (!ciTitle) { resp.data = { bookId: ciBid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] }; send(); return; }
-          // Try stable title-based ID
-          var titleId = 'title:' + ciTitle;
-          var tryIds = titleId !== ciBid ? [titleId] : [];
-          // Also search all books by title
-          findBookIdByTitle(ciTitle).then(function (foundId) {
-            if (foundId && foundId !== ciBid && tryIds.indexOf(foundId) === -1) tryIds.push(foundId);
-            // Try each candidate ID
-            (function tryNext(idx) {
-              if (idx >= tryIds.length) {
-                resp.data = { bookId: ciBid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] };
-                send();
-                return;
-              }
-              var altId = tryIds[idx];
-              getCachedPages(altId).then(function (altPages) {
-                if (altPages.length > 0) {
-                  // Found cache under different ID - migrate to current bookId
-                  migrateBookCache(altId, ciBid).then(function () {
-                    return Promise.all([getBookMeta(ciBid), getCachedPages(ciBid)]);
-                  }).then(function (r2) {
-                    resp.data = { bookId: ciBid, hasCachedPages: true, cachedCount: r2[1].length, cachedPageNums: r2[1].map(function (p) { return p.pageNum; }), meta: r2[0], migrated: true };
-                    send();
-                  }).catch(function () {
-                    // Migration failed, return what we found
-                    resp.data = { bookId: altId, hasCachedPages: true, cachedCount: altPages.length, cachedPageNums: altPages.map(function (p) { return p.pageNum; }), meta: null };
-                    send();
-                  });
-                } else {
-                  tryNext(idx + 1);
-                }
-              }).catch(function () { tryNext(idx + 1); });
-            })(0);
-          }).catch(function () {
-            resp.data = { bookId: ciBid, hasCachedPages: false, cachedCount: 0, cachedPageNums: [] };
-            send();
-          });
-        }).catch(function () { resp.data = { hasCachedPages: false, cachedCount: 0, cachedPageNums: [] }; send(); });
-        break;
-      case 'updateBookMeta':
-        updateBookMeta(getBookId(), event.data.title || '', event.data.totalPages || 0, event.data.toc || [])
-          .then(function () { resp.data = true; send(); }).catch(function (e) { resp.error = e.message; send(); });
-        break;
+
+      // ── Async: capture ──
+      case 'capturePageOnly':   handle(capturePageOnly(event.data.pageNum || 0)); break;
+      case 'captureBothPages':  handle(captureBothPages()); break;
+
+      // ── Async: navigation ──
+      case 'nextPage':  handle(clickNextPage()); break;
+      case 'prevPage':  handle(clickPrevPage()); break;
+      case 'goToPage':  handle(Promise.resolve(goToPage(event.data.pageNum))); break;
+
+      // ── Async: cache ──
+      case 'getCacheInfo':    handle(getCacheInfoForCurrentBook()); break;
+      case 'resolveBookId':   handle(resolveBookIdFromTitle(event.data.title)); break;
+      case 'findBlankPages':  handle(findBlankPagesInRange(event.data.startPage || 1, event.data.endPage || 0)); break;
+      case 'isPageCached':    handle(isPageCached(getBookId(), event.data.pageNum || 0)); break;
+      case 'clearCache':      handle(clearBookCache(getBookId())); break;
+      case 'updateBookMeta':  handle(updateBookMeta(getBookId(), event.data.title || '', event.data.totalPages || 0, event.data.toc || [])); break;
+
+      // ── Async: PDF/ZIP ──
+      case 'initPDF':           handle(initPDF(event.data.extensionBaseURL || '', event.data.targetSize || null)); break;
       case 'buildPDFFromCache':
-        buildPDFFromCacheData(event.data.extensionBaseURL || '', getBookId(), event.data.title || 'ebook', event.data.toc || [], event.data.targetSize || null)
-          .then(function (n) { resp.data = { success: true, pageCount: n }; send(); }).catch(function (e) { resp.error = e.message; send(); });
-        break;
-      case 'clearCache':
-        clearBookCache(getBookId()).then(function () { resp.data = true; send(); }).catch(function (e) { resp.error = e.message; send(); });
+        handle(buildPDFFromCacheData(event.data.extensionBaseURL || '', getBookId(), event.data.title || 'ebook', event.data.toc || [], event.data.targetSize || null)
+          .then(function (n) { return { success: true, pageCount: n }; }));
         break;
       case 'buildZIPFromCache':
-        buildZIPFromCacheData(event.data.extensionBaseURL || '', getBookId(), event.data.title || 'ebook')
-          .then(function () { resp.data = { success: true }; send(); }).catch(function (e) { resp.error = e.message; send(); });
+        handle(buildZIPFromCacheData(event.data.extensionBaseURL || '', getBookId(), event.data.title || 'ebook')
+          .then(function () { return { success: true }; }));
         break;
-      case 'canvasReady':
-        var crc = findCanvas();
-        resp.data = !!(crc && crc.width > 0 && crc.height > 0);
-        send(); break;
-      case 'getCanvasFingerprint':
-        resp.data = getCanvasFingerprint();
-        send(); break;
-      case 'resolveBookId':
-        var rbTitle = event.data.title;
-        if (!rbTitle) { resp.data = getBookId(); send(); break; }
-        var stableId = 'title:' + rbTitle;
-        // Check if cache exists under stable ID already
-        getCachedPages(stableId).then(function (stablePages) {
-          if (stablePages.length > 0) {
-            resolvedBookId = stableId;
-            resp.data = stableId;
-            send();
-            return;
-          }
-          // Check under current URL-based ID
-          var urlId = location.pathname + location.search;
-          return getCachedPages(urlId).then(function (urlPages) {
-            if (urlPages.length > 0 && urlId !== stableId) {
-              // Migrate URL-based cache to stable title-based ID
-              return migrateBookCache(urlId, stableId).then(function () {
-                resolvedBookId = stableId;
-                resp.data = stableId;
-                send();
-              });
-            }
-            // Search all books by title
-            return findBookIdByTitle(rbTitle).then(function (foundId) {
-              if (foundId && foundId !== stableId) {
-                return migrateBookCache(foundId, stableId).then(function () {
-                  resolvedBookId = stableId;
-                  resp.data = stableId;
-                  send();
-                });
-              }
-              resolvedBookId = stableId;
-              resp.data = stableId;
-              send();
-            });
-          });
-        }).catch(function () {
-          resolvedBookId = stableId;
-          resp.data = stableId;
-          send();
-        });
-        break;
-      case 'isPageCached':
-        isPageCached(getBookId(), event.data.pageNum || 0).then(function (exists) {
-          resp.data = exists;
-          send();
-        }).catch(function () { resp.data = false; send(); });
-        break;
-      case 'findBlankPages':
-        var fbStart = event.data.startPage || 1;
-        var fbEnd = event.data.endPage || 0;
-        getCachedPages(getBookId()).then(function (allPages) {
-          var blanks = [];
-          allPages.forEach(function (pg) {
-            if (pg.pageNum < fbStart || pg.pageNum > fbEnd) return;
-            if (!pg.dataURL || pg.dataURL.length < 2000) { blanks.push(pg.pageNum); return; }
-            // Quick size heuristic: very small data for given dimensions = likely blank
-            var expectedMin = (pg.width || 100) * (pg.height || 100) * 0.01;
-            var actualSize = pg.dataURL.length * 0.75; // base64 overhead
-            if (actualSize < expectedMin) blanks.push(pg.pageNum);
-          });
-          resp.data = blanks;
-          send();
-        }).catch(function () { resp.data = []; send(); });
-        break;
-      case 'getCaptureDPR':
-        var crc2 = findCanvas();
-        resp.data = {
-          dpr: _captureDPR, nativeDPR: _nativeDPR, format: _captureFormat, quality: _captureQuality,
-          canvasW: crc2 ? crc2.width : 0, canvasH: crc2 ? crc2.height : 0
-        };
-        send(); break;
-      case 'updateCaptureSettings':
-        _handleLiveDPRUpdate(
-          event.data.dpr || _captureDPR,
-          event.data.format || null,
-          event.data.quality || 0
-        );
-        resp.data = { dpr: _captureDPR, format: _captureFormat };
-        send(); break;
-      case 'ping': resp.data = 'pong'; send(); break;
+
       default: resp.error = 'Unknown action'; send();
     }
   });
