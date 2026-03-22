@@ -293,47 +293,39 @@
       var scanTotal = endPage - startPage + 1;
       var scanDone = 0;
 
-      // ── Fast capture loop (passive-style: navigate + capture all visible canvases) ──
-      var page = startPage;
-      while (page <= endPage) {
-        if (C.shouldStop) { C.notifyPopup('captureStopped', { capturedCount: totalCached }); break; }
+      // ── Fast capture loop: nextPage flipping + captureBothPages ──
+      // Mimics manual page flipping — no slow slider, no verification polling.
+      // 1. Jump to startPage once (slider)
+      // 2. Then just nextPage() to flip like a human
+      // 3. captureBothPages() grabs all visible canvases with real page numbers
+
+      // Initial jump to starting position
+      try { await C.callInject('goToPage', { pageNum: startPage }); } catch (e) {}
+      await C.delay(500);
+      await C.waitCanvasReady(5000);
+
+      var lastCapturedMaxPage = startPage - 1;
+
+      while (!C.shouldStop) {
         while (C.isPaused && !C.shouldStop) await C.delay(500);
-
-        // Skip cached pages
-        if (cached[page]) {
-          skipped++; scanDone++; consErr = 0;
-          C.updateO(totalCached, total, page, scanDone, scanTotal);
-          page++;
-          continue;
-        }
-
-        C.captureSession._currentPage = page;
         if (document.hidden) { await C.focusViewerTab(); await C.delay(300); }
 
-        var navLabel = C._scanRange ? C._scanRange.start + '-' + C._scanRange.end + 'p' : '';
-        C.setOText(navLabel ? navLabel + ' p' + page : page + 'p 캡처 중...');
-
-        // ── Fast path: goToPage → brief wait → captureBothPages ──
-        try { await C.callInject('goToPage', { pageNum: page }); } catch (e) {}
-        await C.delay(400);
-        await C.waitCanvasReady(3000);
-        await C.delay(200);
-
+        // Capture all visible canvases
+        await C.delay(150);
         var results = null;
         try { results = await C.callInject('captureBothPages'); } catch (e) {}
 
-        var gotAny = false;
-        var gotTarget = false;
+        var newCaptures = 0;
+        var highestPageThisRound = 0;
         if (results && results.length > 0) {
           for (var ri = 0; ri < results.length; ri++) {
             var r = results[ri];
             if (!r || !r.ok || !r.pageNum) continue;
+            if (r.pageNum > highestPageThisRound) highestPageThisRound = r.pageNum;
             if (r.pageNum < startPage || r.pageNum > endPage) continue;
             if (cached[r.pageNum]) continue;
             cached[r.pageNum] = true;
-            captured++; totalCached++;
-            gotAny = true;
-            if (r.pageNum === page) gotTarget = true;
+            captured++; totalCached++; newCaptures++;
             if (r.dataURL) {
               await C.cachePageAsync(r.bookId, r.pageNum, r.dataURL, r.width, r.height);
               r.dataURL = null;
@@ -341,64 +333,70 @@
           }
         }
 
-        if (gotAny) {
+        if (newCaptures > 0) {
           consErr = 0;
-          scanDone++;
-          C.updateO(totalCached, total, page, scanDone, scanTotal);
-          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
-        } else {
-          // Fast path failed — fallback to slow verified capture
-          var result = await C.navigateAndCapture(page);
-          if (result && result.ok) {
-            cached[page] = true;
-            captured++; totalCached++; consErr = 0; scanDone++; gotTarget = true;
-            if (result.dataURL) {
-              await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
-              result.dataURL = null;
+          scanDone += newCaptures;
+          C.updateO(totalCached, total, highestPageThisRound, scanDone, scanTotal);
+          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: highestPageThisRound, message: totalCached + '/' + total });
+        }
+
+        if (highestPageThisRound > lastCapturedMaxPage) lastCapturedMaxPage = highestPageThisRound;
+
+        // Check if we've reached the end
+        if (lastCapturedMaxPage >= endPage) break;
+
+        // Check if all pages in range are cached
+        var allDone = true;
+        for (var ck = startPage; ck <= endPage; ck++) {
+          if (!cached[ck]) { allDone = false; break; }
+        }
+        if (allDone) break;
+
+        // Flip to next page (fast, like clicking the arrow)
+        try { await C.callInject('nextPage'); } catch (e) {}
+
+        // Wait for canvas to render (the only real delay needed)
+        await C.waitCanvasReady(3000);
+
+        // If no new captures for a while, we might be stuck — try a jump
+        if (newCaptures === 0) {
+          consErr++;
+          if (consErr >= 5) {
+            // Find next uncaptured page and jump there
+            var nextUncached = 0;
+            for (var nu = startPage; nu <= endPage; nu++) {
+              if (!cached[nu]) { nextUncached = nu; break; }
             }
-            C.updateO(totalCached, total, page, scanDone, scanTotal);
-          } else {
-            // Retry once more with slow method
-            await C.delay(C.liveSettings.dMin);
-            result = await C.navigateAndCapture(page);
-            if (result && result.ok) {
-              cached[page] = true;
-              captured++; totalCached++; consErr = 0; scanDone++; gotTarget = true;
-              if (result.dataURL) {
-                await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
-                result.dataURL = null;
-              }
-              C.updateO(totalCached, total, page, scanDone, scanTotal);
+            if (nextUncached > 0) {
+              try { await C.callInject('goToPage', { pageNum: nextUncached }); } catch (e) {}
+              await C.delay(400);
+              await C.waitCanvasReady(3000);
+              consErr = 0;
             } else {
-              consErr++; scanDone++;
-              C.missingPages.push(page);
-              C.showToast(page + 'p 캡처 실패', 3000);
-              if (consErr >= 3) {
-                C.shouldStop = true;
-                var failMsg = '연속 ' + consErr + '회 캡처 실패 - 자동 중지됨';
-                C.notifyPopup('captureError', { message: failMsg });
-                C.showToast(failMsg, 5000);
-                C.playBeep('error');
-                C.forwardToBackground('showNotification', { title: '캡처 자동 중지', message: failMsg + ' (' + page + '페이지)', requireInteraction: true });
-                break;
-              }
+              break; // all done
             }
+          }
+          if (consErr >= 10) {
+            // Truly stuck — record missing and stop
+            for (var mp = startPage; mp <= endPage; mp++) {
+              if (!cached[mp]) C.missingPages.push(mp);
+            }
+            var failMsg = '캡처 진행 불가 - 자동 중지됨';
+            C.notifyPopup('captureError', { message: failMsg });
+            C.showToast(failMsg, 5000);
+            C.playBeep('error');
+            C.forwardToBackground('showNotification', { title: '캡처 자동 중지', message: failMsg, requireInteraction: true });
+            break;
           }
         }
 
-        // Advance to next uncaptured page
-        page++;
-        while (page <= endPage && cached[page]) { skipped++; scanDone++; page++; }
-
-        // Brief delay between navigations (stealth jitter if enabled)
-        if (page <= endPage && !C.shouldStop) {
-          if (C.liveSettings.stealth) {
-            await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
-          } else {
-            await C.delay(300 + Math.random() * 200);
-          }
+        // Stealth mode: longer random delays
+        if (C.liveSettings.stealth) {
+          await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
         }
       }
+
+      if (C.shouldStop) { C.notifyPopup('captureStopped', { capturedCount: totalCached }); }
 
       try { await C.callInject('updateBookMeta', { title: title, totalPages: total, toc: toc }); } catch (e) {}
 
