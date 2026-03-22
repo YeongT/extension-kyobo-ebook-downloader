@@ -293,124 +293,110 @@
       var scanTotal = endPage - startPage + 1;
       var scanDone = 0;
 
-      for (var page = startPage; page <= endPage; page++) {
+      // ── Fast capture loop (passive-style: navigate + capture all visible canvases) ──
+      var page = startPage;
+      while (page <= endPage) {
         if (C.shouldStop) { C.notifyPopup('captureStopped', { capturedCount: totalCached }); break; }
         while (C.isPaused && !C.shouldStop) await C.delay(500);
 
-        C.captureSession._currentPage = page;
-
-        // Ensure viewer is in foreground
-        if (document.hidden) {
-          await C.focusViewerTab();
-          await C.delay(400);
-        }
-
-        // ALWAYS skip cached pages (not just in resume mode)
+        // Skip cached pages
         if (cached[page]) {
-          skipped++;
-          consErr = 0;
-          scanDone++;
+          skipped++; scanDone++; consErr = 0;
           C.updateO(totalCached, total, page, scanDone, scanTotal);
-          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 캐시 건너뜀' });
+          page++;
           continue;
         }
 
-        // Show navigation status
+        C.captureSession._currentPage = page;
+        if (document.hidden) { await C.focusViewerTab(); await C.delay(300); }
+
         var navLabel = C._scanRange ? C._scanRange.start + '-' + C._scanRange.end + 'p' : '';
-        C.setOText(navLabel ? navLabel + ' 이동 중... p' + page : page + 'p 이동 중...');
+        C.setOText(navLabel ? navLabel + ' p' + page : page + 'p 캡처 중...');
 
-        // Navigate to target page
-        var result = await C.navigateAndCapture(page);
+        // ── Fast path: goToPage → brief wait → captureBothPages ──
+        try { await C.callInject('goToPage', { pageNum: page }); } catch (e) {}
+        await C.delay(400);
+        await C.waitCanvasReady(3000);
+        await C.delay(200);
 
-        if (result && result.ok) {
-          captured++; totalCached++; consErr = 0;
-          scanDone++;
-          cached[page] = true;
-          if (result.dataURL) {
-            await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
-            result.dataURL = null;
+        var results = null;
+        try { results = await C.callInject('captureBothPages'); } catch (e) {}
+
+        var gotAny = false;
+        var gotTarget = false;
+        if (results && results.length > 0) {
+          for (var ri = 0; ri < results.length; ri++) {
+            var r = results[ri];
+            if (!r || !r.ok || !r.pageNum) continue;
+            if (r.pageNum < startPage || r.pageNum > endPage) continue;
+            if (cached[r.pageNum]) continue;
+            cached[r.pageNum] = true;
+            captured++; totalCached++;
+            gotAny = true;
+            if (r.pageNum === page) gotTarget = true;
+            if (r.dataURL) {
+              await C.cachePageAsync(r.bookId, r.pageNum, r.dataURL, r.width, r.height);
+              r.dataURL = null;
+            }
           }
+        }
+
+        if (gotAny) {
+          consErr = 0;
+          scanDone++;
           C.updateO(totalCached, total, page, scanDone, scanTotal);
           C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: totalCached + '/' + total + ' 캡처 완료' });
-
-          // Bonus: capture pre-loaded adjacent pages
-          try {
-            var preloaded = await C.callInject('captureBothPages');
-            if (preloaded && preloaded.length > 0) {
-              for (var pi = 0; pi < preloaded.length; pi++) {
-                var pp = preloaded[pi];
-                if (!pp || !pp.ok || !pp.pageNum) continue;
-                if (cached[pp.pageNum]) continue;
-                if (pp.pageNum < startPage || pp.pageNum > endPage) continue;
-                cached[pp.pageNum] = true;
-                captured++; totalCached++;
-                if (pp.dataURL) {
-                  await C.cachePageAsync(pp.bookId, pp.pageNum, pp.dataURL, pp.width, pp.height);
-                  pp.dataURL = null;
-                }
-              }
-              C.updateO(totalCached, total, page, scanDone, scanTotal);
-            }
-          } catch (e) {}
         } else {
-          // Page failed - retry up to 3 times before giving up
-          var retried = false;
-          var errReason = (result && result.error) ? result.error : 'unknown';
-          for (var retryN = 1; retryN <= 3 && !C.shouldStop; retryN++) {
-            C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 재시도 ' + retryN + '/3...' });
+          // Fast path failed — fallback to slow verified capture
+          var result = await C.navigateAndCapture(page);
+          if (result && result.ok) {
+            cached[page] = true;
+            captured++; totalCached++; consErr = 0; scanDone++; gotTarget = true;
+            if (result.dataURL) {
+              await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
+              result.dataURL = null;
+            }
             C.updateO(totalCached, total, page, scanDone, scanTotal);
-            await C.delay(C.liveSettings.dMin * 2);
-
-            if (document.hidden) { await C.focusViewerTab(); await C.delay(400); }
+          } else {
+            // Retry once more with slow method
+            await C.delay(C.liveSettings.dMin);
             result = await C.navigateAndCapture(page);
             if (result && result.ok) {
-              retried = true;
-              captured++; totalCached++; consErr = 0;
-              scanDone++;
               cached[page] = true;
+              captured++; totalCached++; consErr = 0; scanDone++; gotTarget = true;
               if (result.dataURL) {
                 await C.cachePageAsync(result.bookId, result.pageNum, result.dataURL, result.width, result.height);
                 result.dataURL = null;
               }
               C.updateO(totalCached, total, page, scanDone, scanTotal);
-              C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 재시도 성공' });
-              break;
-            }
-          }
-
-          if (!retried) {
-            consErr++;
-            scanDone++;
-            C.missingPages.push(page);
-            C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: page, message: page + 'p 실패 (3회 재시도 후): ' + errReason });
-            C.showToast(page + 'p 캡처 실패', 3000);
-
-            if (consErr >= 3) {
-              C.shouldStop = true;
-              var failMsg = '연속 ' + consErr + '회 캡처 실패 - 자동 중지됨';
-              C.notifyPopup('captureError', { message: failMsg });
-              C.showToast(failMsg, 5000);
-              C.playBeep('error');
-              // Send persistent notification via background
-              C.forwardToBackground('showNotification', {
-                title: '캡처 자동 중지',
-                message: failMsg + ' (' + page + '페이지)',
-                requireInteraction: true
-              });
-              break;
+            } else {
+              consErr++; scanDone++;
+              C.missingPages.push(page);
+              C.showToast(page + 'p 캡처 실패', 3000);
+              if (consErr >= 3) {
+                C.shouldStop = true;
+                var failMsg = '연속 ' + consErr + '회 캡처 실패 - 자동 중지됨';
+                C.notifyPopup('captureError', { message: failMsg });
+                C.showToast(failMsg, 5000);
+                C.playBeep('error');
+                C.forwardToBackground('showNotification', { title: '캡처 자동 중지', message: failMsg + ' (' + page + '페이지)', requireInteraction: true });
+                break;
+              }
             }
           }
         }
 
-        // Keep viewer in foreground
-        if (document.hidden) {
-          await C.focusViewerTab();
-          await C.delay(300);
-        }
+        // Advance to next uncaptured page
+        page++;
+        while (page <= endPage && cached[page]) { skipped++; scanDone++; page++; }
 
-        // Delay between pages
-        if (page < endPage && !C.shouldStop) {
-          await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, C.liveSettings.stealth);
+        // Brief delay between navigations (stealth jitter if enabled)
+        if (page <= endPage && !C.shouldStop) {
+          if (C.liveSettings.stealth) {
+            await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
+          } else {
+            await C.delay(300 + Math.random() * 200);
+          }
         }
       }
 
