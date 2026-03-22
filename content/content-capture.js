@@ -454,32 +454,27 @@
         }
       }
 
-      if (captured > 0 && !C.shouldStop) {
-        var isComplete = C.missingPages.length === 0 && totalCached >= total;
+      if (captured > 0) {
         var isPartialRescan = startPage > 1 || endPage < total;
-        var msg = totalCached + '/' + total + '페이지 캡처 완료';
+        var msg = totalCached + '/' + total + '페이지 캡처';
+        if (C.shouldStop) msg += ' (중지됨)';
+        else msg += ' 완료';
         if (C.missingPages.length > 0) msg += ' (' + C.missingPages.length + '개 누락)';
         C.showToast(msg, 5000);
-        C.playBeep(C.missingPages.length > 0 ? 'error' : 'success');
+        C.playBeep(C.shouldStop ? 'error' : (C.missingPages.length > 0 ? 'error' : 'success'));
         C.setOState('idle');
-        C.notifyPopup('captureComplete', {
+        C.notifyPopup(C.shouldStop ? 'captureStopped' : 'captureComplete', {
           capturedCount: totalCached, title: title, partial: isPartialRescan,
           missing: C.missingPages.length, missingPages: C.missingPages
         });
-        // Full scan to end of book → close viewer + open sessions
-        // Partial/mid-range → just switch to sessions tab, keep viewer open
-        if (endPage >= total && startPage <= 1) {
-          setTimeout(function () {
-            chrome.runtime.sendMessage({
-              target: 'background', action: 'openSessions',
-              title: title
-            }, function () {
-              void chrome.runtime.lastError;
-              setTimeout(function () { window.close(); }, 500);
-            });
-          }, 2000);
-        }
-      } else if (C.shouldStop) {
+        // Always open sessions manager after capture (stop or complete)
+        setTimeout(function () {
+          chrome.runtime.sendMessage({
+            target: 'background', action: 'openSessions',
+            title: title
+          }, function () { void chrome.runtime.lastError; });
+        }, 1000);
+      } else {
         C.setOState('idle');
       }
       C.clearSession();
@@ -507,31 +502,62 @@
     var rescanned = 0;
     var stillMissing = [];
 
+    // Build set of target pages for quick lookup
+    var targetSet = {};
+    pageList.forEach(function (p) { targetSet[p] = true; });
+
     for (var i = 0; i < total; i++) {
       if (C.shouldStop) break;
       while (C.isPaused && !C.shouldStop) await C.delay(500);
 
       var pn = pageList[i];
+      if (!targetSet[pn]) { rescanned++; continue; } // already captured by a previous spread
       C.updateO(i + 1, total, pn);
 
-      if (document.hidden) {
-        await C.focusViewerTab();
-        await C.delay(400);
+      if (document.hidden) { await C.focusViewerTab(); await C.delay(300); }
+
+      // Fast: goToPage + captureBothPages (captures both pages in 2-view spread)
+      try { await C.callInject('goToPage', { pageNum: pn }); } catch (e) {}
+      await C.delay(400);
+      await C.waitCanvasReady(3000);
+      await C.delay(150);
+
+      var results = null;
+      try { results = await C.callInject('captureBothPages'); } catch (e) {}
+
+      var gotTarget = false;
+      if (results && results.length > 0) {
+        for (var ri = 0; ri < results.length; ri++) {
+          var r = results[ri];
+          if (!r || !r.ok || !r.pageNum) continue;
+          if (r.dataURL) {
+            await C.cachePageAsync(C.getBookId(), r.pageNum, r.dataURL, r.width, r.height);
+            r.dataURL = null;
+          }
+          if (targetSet[r.pageNum]) {
+            delete targetSet[r.pageNum]; // mark as done so we skip if it appears again
+            rescanned++;
+            gotTarget = true;
+          }
+        }
       }
 
-      var result = await C.navigateAndCapture(pn);
-
-      if (result && result.ok) {
-        rescanned++;
-        if (result.dataURL) {
-          C.forwardToBackground('cachePage', { bookId: result.bookId, pageNum: result.pageNum, dataURL: result.dataURL, width: result.width, height: result.height });
+      if (!gotTarget) {
+        // Fallback: slow single-page capture
+        var result = await C.navigateAndCapture(pn);
+        if (result && result.ok) {
+          rescanned++;
+          delete targetSet[pn];
+          if (result.dataURL) {
+            await C.cachePageAsync(C.getBookId(), result.pageNum, result.dataURL, result.width, result.height);
+          }
+        } else {
+          stillMissing.push(pn);
         }
-      } else {
-        stillMissing.push(pn);
       }
 
       if (i < total - 1 && !C.shouldStop) {
-        await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, C.liveSettings.stealth);
+        await C.delay(300 + Math.random() * 200);
       }
     }
 
@@ -540,6 +566,17 @@
     C.isCapturing = false; C.shouldStop = false;
     C.setOState('idle');
     C.showToast(rescanned + '페이지 재스캔 완료' + (stillMissing.length > 0 ? ' (' + stillMissing.length + '개 여전히 누락)' : ''), 4000);
+    C.playBeep(stillMissing.length > 0 ? 'error' : 'success');
+    // Switch to sessions manager
+    try {
+      var pi = await C.callInject('getPageInfo');
+      setTimeout(function () {
+        chrome.runtime.sendMessage({
+          target: 'background', action: 'openSessions',
+          title: (pi && pi.title) || ''
+        }, function () { void chrome.runtime.lastError; });
+      }, 1000);
+    } catch (e) {}
   };
 
 })(window._C = window._C || {});
