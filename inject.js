@@ -306,6 +306,14 @@
            document.querySelector('#content canvas, .mid_zone canvas');
   }
 
+  // Find canvas by specific page number (for automated capture — no viewport check)
+  function findCanvasByPageNum(pageNum) {
+    var el = document.getElementById('pdfPage_' + pageNum);
+    if (!el) return null;
+    var c = el.querySelector('.canvasLayer canvas') || el.querySelector('canvas');
+    return (c && c.width > 0 && c.height > 0) ? c : null;
+  }
+
   // Find all rendered canvases that are VISIBLE in the viewport (not pre-rendered)
   function findAllCanvases() {
     var result = [];
@@ -984,7 +992,9 @@
   // ── 7b. Capture helpers (extracted from message handler) ──
 
   function capturePageOnly(pageNum) {
-    var canvas = findCanvas();
+    // Try by page number first (works during automated capture even if not yet in viewport)
+    var canvas = (pageNum > 0) ? findCanvasByPageNum(pageNum) : null;
+    if (!canvas) canvas = findCanvas(); // fallback: viewport-visible
     if (!canvas) return Promise.reject(new Error('Canvas not found'));
     if (canvas.width === 0 || canvas.height === 0) return Promise.resolve({ ok: false, error: 'canvas_empty' });
     removeWatermarks();
@@ -1005,6 +1015,18 @@
   function captureBothPages() {
     removeWatermarks();
     var canvases = findAllCanvases();
+    // Fallback: if viewport check found nothing, try all pdf-load canvases
+    if (canvases.length === 0) {
+      var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
+      for (var fi = 0; fi < pages.length; fi++) {
+        var fc = pages[fi].querySelector('.canvasLayer canvas') || pages[fi].querySelector('canvas');
+        if (fc && fc.width > 0 && fc.height > 0 && !isCanvasBlank(fc)) {
+          var fMatch = pages[fi].id.match(/pdfPage_(\d+)/);
+          if (fMatch) canvases.push({ canvas: fc, pageNum: parseInt(fMatch[1], 10) });
+        }
+      }
+      canvases.sort(function (a, b) { return a.pageNum - b.pageNum; });
+    }
     if (canvases.length === 0) return Promise.resolve([]);
     var bid = getBookId();
     var promises = canvases.map(function (bc) {
@@ -1159,6 +1181,11 @@
         resp.data = cv ? { width: cv.width, height: cv.height } : null; send(); break;
       case 'canvasReady':
         var crc = findCanvas();
+        if (!crc) {
+          // Fallback: any pdf-load canvas with content
+          var pls = document.querySelectorAll('.pdfPage[pdf-load="true"] canvas');
+          for (var ci = 0; ci < pls.length; ci++) { if (pls[ci].width > 0 && pls[ci].height > 0) { crc = pls[ci]; break; } }
+        }
         resp.data = !!(crc && crc.width > 0 && crc.height > 0); send(); break;
       case 'getCaptureDPR':
         var crc2 = findCanvas();
