@@ -155,7 +155,15 @@
     if (status === 'captured') {
       S.confirmedPages[pageNum] = true;
       S.saveConfirmedPages();
+      // Remove from suspect list and update inspection data
+      if (S.inspectionData && S.inspectionData.suspectPages) {
+        S.inspectionData.suspectPages = S.inspectionData.suspectPages.filter(function (p) { return p !== pageNum; });
+        S.saveInspection(S.inspectionData.suspectPages, S.inspectionData.thumbs, S.inspectionData.pageSet);
+      }
     }
+    S.updateFilterCounts();
+    S.refreshDetailHeader();
+    S.renderMissingRanges();
     S.showToast(pageNum + 'p → 정상 확인');
   };
 

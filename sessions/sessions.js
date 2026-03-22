@@ -763,7 +763,15 @@
         tile.classList.remove('selected');
       });
       S.saveConfirmedPages();
+      // Remove confirmed pages from suspect list
+      if (S.inspectionData && S.inspectionData.suspectPages) {
+        S.inspectionData.suspectPages = S.inspectionData.suspectPages.filter(function (p) { return !S.confirmedPages[p]; });
+        S.saveInspection(S.inspectionData.suspectPages, S.inspectionData.thumbs, S.inspectionData.pageSet);
+      }
       S.updateBatchBtn();
+      S.updateFilterCounts();
+      S.refreshDetailHeader();
+      S.renderMissingRanges();
       S.showToast(count + '개 페이지 정상 확인');
     });
 
