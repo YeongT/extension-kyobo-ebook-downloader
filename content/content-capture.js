@@ -355,10 +355,13 @@
         // Progress update
         var scanDone = 0;
         for (var sc = startPage; sc <= endPage; sc++) { if (cached[sc]) scanDone++; }
-        C.updateO(totalCached, total, viewerPos, scanDone, scanTotal);
+        renderedPages.sort(function (a, b) { return a - b; });
+        var pageDisplay = renderedPages.length > 1 ? renderedPages : viewerPos;
+        C.updateO(totalCached, total, pageDisplay, scanDone, scanTotal);
         if (newCaptures > 0) {
           emptyFlips = 0;
-          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: viewerPos, message: totalCached + '/' + total });
+          var pageMsg = renderedPages.length > 1 ? 'p' + renderedPages.join(',') : 'p' + viewerPos;
+          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: viewerPos, message: totalCached + '/' + total + ' ' + pageMsg });
         } else {
           emptyFlips++;
         }

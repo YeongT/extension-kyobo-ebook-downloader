@@ -536,16 +536,25 @@
     if (bookTotal > 0) C._bookTotal = bookTotal;
     var bt = C._bookTotal || bookTotal;
 
-    // Partial range: show range-specific progress
+    // page can be a number, array, or string (e.g. [1,2] → "p1,2")
+    var pageLabel = '';
+    if (page) {
+      if (Array.isArray(page)) {
+        pageLabel = page.length > 0 ? '  p' + page.join(',') : '';
+      } else {
+        pageLabel = '  p' + page;
+      }
+    }
+
     if (C._scanRange && scanTotal > 0 && scanTotal < bt) {
       var sPct = scanTotal > 0 ? Math.round(scanDone / scanTotal * 100) : 0;
       if (text && !C.isPaused) text.textContent = C._scanRange.start + '-' + C._scanRange.end + 'p 캡처 중...';
-      if (pr) pr.textContent = scanDone + '/' + scanTotal + ' (' + sPct + '%)' + (page ? '  p' + page : '');
+      if (pr) pr.textContent = scanDone + '/' + scanTotal + ' (' + sPct + '%)' + pageLabel;
       if (bar) bar.style.width = sPct + '%';
     } else {
       var pct = bt > 0 ? Math.round(capturedSoFar / bt * 100) : 0;
       if (text && !C.isPaused) text.textContent = '캡처 중...';
-      if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + (page ? '  p' + page : '');
+      if (pr) pr.textContent = capturedSoFar + '/' + bt + ' (' + pct + '%)' + pageLabel;
       if (bar) bar.style.width = pct + '%';
     }
   };
