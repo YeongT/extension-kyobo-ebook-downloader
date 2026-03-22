@@ -1094,10 +1094,20 @@
     }).catch(function () { return []; });
   }
 
-  // ── 7c. Get rendered page numbers (handles 2-page spread view) ──
+  // ── 7c. Get visible page numbers (no blank check — for detection, not capture) ──
   function getRenderedPageNums() {
-    var canvases = findAllCanvases();
-    return canvases.map(function (c) { return c.pageNum; });
+    var result = [];
+    var pages = document.querySelectorAll('.pdfPage[pdf-load="true"]');
+    for (var i = 0; i < pages.length; i++) {
+      if (!isPageVisible(pages[i])) continue;
+      var c = pages[i].querySelector('.canvasLayer canvas') || pages[i].querySelector('canvas');
+      if (c && c.width > 0 && c.height > 0) {
+        var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
+        if (idMatch) result.push(parseInt(idMatch[1], 10));
+      }
+    }
+    result.sort(function (a, b) { return a - b; });
+    return result;
   }
 
   // ── 7d. Canvas fingerprint (detect content change after page navigation) ──
