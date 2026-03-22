@@ -41,6 +41,19 @@
 
   var ALLOWED_ORIGIN = location.origin;
 
+  // ── Page number offset: DOM pdfPage_N is 0-based, viewer is 1-based ──
+  // Detected once when pdfPage_0 exists → offset = 1 (domNum + 1 = viewerNum)
+  var _pageNumOffset = 0;
+  function detectPageOffset() {
+    if (document.getElementById('pdfPage_0')) _pageNumOffset = 1;
+  }
+  // Detect on load and re-detect periodically (DOM may not be ready immediately)
+  setTimeout(detectPageOffset, 500);
+  setTimeout(detectPageOffset, 2000);
+
+  function domToViewer(domPageNum) { return domPageNum + _pageNumOffset; }
+  function viewerToDom(viewerPageNum) { return viewerPageNum - _pageNumOffset; }
+
   // Incremental PDF building
   var pdfDocument = null;
   var pdfDims = null;
@@ -308,7 +321,7 @@
 
   // Find canvas by specific page number (for automated capture — no viewport check)
   function findCanvasByPageNum(pageNum) {
-    var el = document.getElementById('pdfPage_' + pageNum);
+    var el = document.getElementById('pdfPage_' + viewerToDom(pageNum));
     if (!el) return null;
     var c = el.querySelector('.canvasLayer canvas') || el.querySelector('canvas');
     return (c && c.width > 0 && c.height > 0) ? c : null;
@@ -325,7 +338,7 @@
       if (c && c.width > 0 && c.height > 0) {
         if (isCanvasBlank(c)) continue;
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
-        var pageNum = idMatch ? parseInt(idMatch[1], 10) : -1;
+        var pageNum = idMatch ? domToViewer(parseInt(idMatch[1], 10)) : -1;
         if (pageNum >= 1) result.push({ canvas: c, pageNum: pageNum });
       }
     }
@@ -1022,7 +1035,7 @@
         var fc = pages[fi].querySelector('.canvasLayer canvas') || pages[fi].querySelector('canvas');
         if (fc && fc.width > 0 && fc.height > 0 && !isCanvasBlank(fc)) {
           var fMatch = pages[fi].id.match(/pdfPage_(\d+)/);
-          if (fMatch) { var fpn = parseInt(fMatch[1], 10); if (fpn >= 1) canvases.push({ canvas: fc, pageNum: fpn }); }
+          if (fMatch) { var fpn = domToViewer(parseInt(fMatch[1], 10)); if (fpn >= 1) canvases.push({ canvas: fc, pageNum: fpn }); }
         }
       }
       canvases.sort(function (a, b) { return a.pageNum - b.pageNum; });
@@ -1126,7 +1139,7 @@
       if (c && c.width > 0 && c.height > 0) {
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
         if (idMatch) {
-          var pn = parseInt(idMatch[1], 10);
+          var pn = domToViewer(parseInt(idMatch[1], 10));
           if (pn >= 1) result.push(pn);
         }
       }
