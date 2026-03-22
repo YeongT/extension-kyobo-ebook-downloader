@@ -318,7 +318,7 @@
         if (isCanvasBlank(c)) continue;
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
         var pageNum = idMatch ? parseInt(idMatch[1], 10) : 0;
-        result.push({ canvas: c, pageNum: pageNum });
+        if (pageNum >= 1) result.push({ canvas: c, pageNum: pageNum });
       }
     }
     result.sort(function (a, b) { return a.pageNum - b.pageNum; });
@@ -1103,7 +1103,10 @@
       var c = pages[i].querySelector('.canvasLayer canvas') || pages[i].querySelector('canvas');
       if (c && c.width > 0 && c.height > 0) {
         var idMatch = pages[i].id.match(/pdfPage_(\d+)/);
-        if (idMatch) result.push(parseInt(idMatch[1], 10));
+        if (idMatch) {
+          var pn = parseInt(idMatch[1], 10);
+          if (pn >= 1) result.push(pn);
+        }
       }
     }
     result.sort(function (a, b) { return a - b; });
