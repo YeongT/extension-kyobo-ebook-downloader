@@ -84,9 +84,14 @@
   var _passiveRefreshTimer = null;
   S._schedulePassiveRefresh = function () {
     clearTimeout(_passiveRefreshTimer);
-    _passiveRefreshTimer = setTimeout(function () {
+    _passiveRefreshTimer = setTimeout(async function () {
       if (S.selectedBookId) {
-        S.refreshBookData();
+        var prevCount = S.capturedPageNums.length;
+        await S.refreshBookData();
+        // Re-inspect if new pages were added (incremental — only checks new ones)
+        if (S.capturedPageNums.length !== prevCount) {
+          S.loadAllThumbnails();
+        }
       }
     }, 3000);
   };
