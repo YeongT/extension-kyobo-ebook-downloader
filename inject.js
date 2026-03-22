@@ -42,17 +42,13 @@
   var ALLOWED_ORIGIN = location.origin;
 
   // ── Page number offset: DOM pdfPage_N is 0-based, viewer is 1-based ──
-  // Detected once when pdfPage_0 exists → offset = 1 (domNum + 1 = viewerNum)
-  var _pageNumOffset = 0;
-  function detectPageOffset() {
-    if (document.getElementById('pdfPage_0')) _pageNumOffset = 1;
+  // pdfPage_0 exists → offset 1 (domNum + 1 = viewerNum)
+  // Checked live each call since DOM may load late
+  function getPageOffset() {
+    return document.getElementById('pdfPage_0') ? 1 : 0;
   }
-  // Detect on load and re-detect periodically (DOM may not be ready immediately)
-  setTimeout(detectPageOffset, 500);
-  setTimeout(detectPageOffset, 2000);
-
-  function domToViewer(domPageNum) { return domPageNum + _pageNumOffset; }
-  function viewerToDom(viewerPageNum) { return viewerPageNum - _pageNumOffset; }
+  function domToViewer(domPageNum) { return domPageNum + getPageOffset(); }
+  function viewerToDom(viewerPageNum) { return viewerPageNum - getPageOffset(); }
 
   // Incremental PDF building
   var pdfDocument = null;
