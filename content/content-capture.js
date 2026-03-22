@@ -289,40 +289,41 @@
         await C.delay(500);
       }
 
-      var captured = 0, skipped = 0, consErr = 0;
+      var captured = 0;
       var scanTotal = endPage - startPage + 1;
-      var scanDone = 0;
 
-      // ── Fast capture loop: nextPage flipping + captureBothPages ──
-      // Mimics manual page flipping — no slow slider, no verification polling.
-      // 1. Jump to startPage once (slider)
-      // 2. Then just nextPage() to flip like a human
-      // 3. captureBothPages() grabs all visible canvases with real page numbers
+      // ── Fast capture: flip through pages like a human ──
+      // 1. Jump to startPage (slider, once)
+      // 2. Capture all visible canvases (captureBothPages)
+      // 3. nextPage() to flip forward
+      // 4. Stop when viewer passes endPage
+      // 5. Then sweep back for any missed pages
 
-      // Initial jump to starting position
       try { await C.callInject('goToPage', { pageNum: startPage }); } catch (e) {}
       await C.delay(500);
       await C.waitCanvasReady(5000);
 
-      var lastCapturedMaxPage = startPage - 1;
+      // ── Phase 1: Forward sweep — flip through startPage to endPage ──
+      var viewerPos = startPage;
+      var emptyFlips = 0;
 
-      while (!C.shouldStop) {
+      while (!C.shouldStop && viewerPos <= endPage) {
         while (C.isPaused && !C.shouldStop) await C.delay(500);
         if (document.hidden) { await C.focusViewerTab(); await C.delay(300); }
 
         // Capture all visible canvases
-        await C.delay(150);
         var results = null;
         try { results = await C.callInject('captureBothPages'); } catch (e) {}
 
+        // Read actual viewer position from rendered canvases
+        var renderedPages = [];
         var newCaptures = 0;
-        var highestPageThisRound = 0;
         if (results && results.length > 0) {
           for (var ri = 0; ri < results.length; ri++) {
             var r = results[ri];
-            if (!r || !r.ok || !r.pageNum) continue;
-            if (r.pageNum > highestPageThisRound) highestPageThisRound = r.pageNum;
-            if (r.pageNum < startPage || r.pageNum > endPage) continue;
+            if (!r || !r.pageNum) continue;
+            renderedPages.push(r.pageNum);
+            if (!r.ok || r.pageNum < startPage || r.pageNum > endPage) continue;
             if (cached[r.pageNum]) continue;
             cached[r.pageNum] = true;
             captured++; totalCached++; newCaptures++;
@@ -333,66 +334,80 @@
           }
         }
 
+        // Update viewer position from what we actually see
+        if (renderedPages.length > 0) {
+          viewerPos = Math.max.apply(null, renderedPages);
+        }
+
+        // Progress update
+        var scanDone = 0;
+        for (var sc = startPage; sc <= endPage; sc++) { if (cached[sc]) scanDone++; }
+        C.updateO(totalCached, total, viewerPos, scanDone, scanTotal);
         if (newCaptures > 0) {
-          consErr = 0;
-          scanDone += newCaptures;
-          C.updateO(totalCached, total, highestPageThisRound, scanDone, scanTotal);
-          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: highestPageThisRound, message: totalCached + '/' + total });
+          emptyFlips = 0;
+          C.notifyPopup('captureProgress', { current: totalCached, total: total, scanCurrent: scanDone, scanTotal: scanTotal, page: viewerPos, message: totalCached + '/' + total });
+        } else {
+          emptyFlips++;
         }
 
-        if (highestPageThisRound > lastCapturedMaxPage) lastCapturedMaxPage = highestPageThisRound;
+        // Stop condition: viewer passed the end
+        if (viewerPos >= endPage) break;
 
-        // Check if we've reached the end
-        if (lastCapturedMaxPage >= endPage) break;
-
-        // Check if all pages in range are cached
-        var allDone = true;
-        for (var ck = startPage; ck <= endPage; ck++) {
-          if (!cached[ck]) { allDone = false; break; }
+        // Stuck detection: 20 flips with no new captures
+        if (emptyFlips >= 20) {
+          C.showToast('캡처 진행 불가 - 중지됨', 5000);
+          C.playBeep('error');
+          break;
         }
-        if (allDone) break;
 
-        // Flip to next page (fast, like clicking the arrow)
+        // Flip to next page
         try { await C.callInject('nextPage'); } catch (e) {}
+        await C.waitCanvasReady(2000);
+        await C.delay(100);
 
-        // Wait for canvas to render (the only real delay needed)
-        await C.waitCanvasReady(3000);
-
-        // If no new captures for a while, we might be stuck — try a jump
-        if (newCaptures === 0) {
-          consErr++;
-          if (consErr >= 5) {
-            // Find next uncaptured page and jump there
-            var nextUncached = 0;
-            for (var nu = startPage; nu <= endPage; nu++) {
-              if (!cached[nu]) { nextUncached = nu; break; }
-            }
-            if (nextUncached > 0) {
-              try { await C.callInject('goToPage', { pageNum: nextUncached }); } catch (e) {}
-              await C.delay(400);
-              await C.waitCanvasReady(3000);
-              consErr = 0;
-            } else {
-              break; // all done
-            }
-          }
-          if (consErr >= 10) {
-            // Truly stuck — record missing and stop
-            for (var mp = startPage; mp <= endPage; mp++) {
-              if (!cached[mp]) C.missingPages.push(mp);
-            }
-            var failMsg = '캡처 진행 불가 - 자동 중지됨';
-            C.notifyPopup('captureError', { message: failMsg });
-            C.showToast(failMsg, 5000);
-            C.playBeep('error');
-            C.forwardToBackground('showNotification', { title: '캡처 자동 중지', message: failMsg, requireInteraction: true });
-            break;
-          }
-        }
-
-        // Stealth mode: longer random delays
         if (C.liveSettings.stealth) {
           await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
+        }
+      }
+
+      // ── Phase 2: Fill missed pages (jump to each uncaptured page) ──
+      if (!C.shouldStop) {
+        var missed = [];
+        for (var m = startPage; m <= endPage; m++) {
+          if (!cached[m]) missed.push(m);
+        }
+
+        if (missed.length > 0 && missed.length <= scanTotal * 0.5) {
+          C.setOText('누락 ' + missed.length + '페이지 보충 중...');
+          for (var mi = 0; mi < missed.length && !C.shouldStop; mi++) {
+            var mp = missed[mi];
+            try { await C.callInject('goToPage', { pageNum: mp }); } catch (e) {}
+            await C.delay(400);
+            await C.waitCanvasReady(3000);
+            await C.delay(150);
+
+            var mResults = null;
+            try { mResults = await C.callInject('captureBothPages'); } catch (e) {}
+            if (mResults && mResults.length > 0) {
+              for (var mri = 0; mri < mResults.length; mri++) {
+                var mr = mResults[mri];
+                if (!mr || !mr.ok || !mr.pageNum) continue;
+                if (mr.pageNum < startPage || mr.pageNum > endPage) continue;
+                if (cached[mr.pageNum]) continue;
+                cached[mr.pageNum] = true;
+                captured++; totalCached++;
+                if (mr.dataURL) {
+                  await C.cachePageAsync(mr.bookId, mr.pageNum, mr.dataURL, mr.width, mr.height);
+                  mr.dataURL = null;
+                }
+              }
+            }
+            C.updateO(totalCached, total, mp, null, null);
+
+            if (C.liveSettings.stealth) {
+              await C.randomDelay(C.liveSettings.dMin, C.liveSettings.dMax, true);
+            }
+          }
         }
       }
 
