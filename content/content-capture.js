@@ -1,11 +1,17 @@
 (function (C) {
   'use strict';
 
-  // ── Page verification (read viewer's page indicator) ──
+  // ── Page verification (check rendered canvases, not just indicator) ──
+  // In 2-page spread view, the indicator only shows even pages (e.g. spread 5-6 → "6").
+  // So we check if the target page is among the actually rendered canvas page numbers.
   C.verifyPageNum = async function (expected, timeout) {
     var deadline = Date.now() + (timeout || 15000);
     while (Date.now() < deadline) {
       try {
+        // Primary: check rendered canvas page numbers (handles 2-page view)
+        var rendered = await C.callInject('getRenderedPageNums');
+        if (rendered && rendered.indexOf(expected) !== -1) return true;
+        // Fallback: check page indicator (1-page view)
         var viewerPage = await C.callInject('getViewerPageNum');
         if (viewerPage === expected) return true;
       } catch (e) {}
@@ -49,9 +55,22 @@
     var fpBefore = '';
     try { fpBefore = await C.callInject('getCanvasFingerprint'); } catch (e) {}
 
+    // Helper: check if target page is visible (rendered canvas or indicator match)
+    var isTargetVisible = async function () {
+      try {
+        var rendered = await C.callInject('getRenderedPageNums');
+        if (rendered && rendered.indexOf(targetPage) !== -1) return true;
+      } catch (e) {}
+      try {
+        var vp = await C.callInject('getViewerPageNum');
+        if (vp === targetPage) return true;
+      } catch (e) {}
+      return false;
+    };
+
     // 3. Navigate based on actual viewer position
-    if (curPage === targetPage) {
-      // Already on the right page — skip navigation
+    if (curPage === targetPage || (await isTargetVisible())) {
+      // Already on the right page or visible in spread — skip navigation
     } else if (curPage > 0 && targetPage === curPage + 1) {
       await C.callInject('nextPage');
     } else if (curPage > 0 && targetPage === curPage - 1) {
@@ -62,12 +81,12 @@
         try {
           await C.callInject('goToPage', { pageNum: targetPage });
         } catch (e) {}
-        // Wait longer for jump navigation to settle (especially for large jumps)
         await C.delay(800 + Math.min(Math.abs(targetPage - curPage), 50) * 10);
+        // In 2-page view, target may already be rendered even if indicator differs
+        if (await isTargetVisible()) break;
+        // Sequential fallback for small remaining gaps (1-page view only)
         var afterJump = 0;
         try { afterJump = await C.callInject('getViewerPageNum'); } catch (e2) {}
-        if (afterJump === targetPage) break;
-        // Sequential fallback for small remaining gaps
         if (afterJump > 0 && afterJump !== targetPage) {
           var gap = targetPage - afterJump;
           if (Math.abs(gap) <= 15) {
@@ -75,6 +94,7 @@
             for (var s = 0; s < Math.abs(gap); s++) {
               await C.callInject(step);
               await C.delay(350);
+              if (await isTargetVisible()) break;
             }
             break;
           }
@@ -85,19 +105,22 @@
     // 4. Wait for page indicator to update
     await C.delay(600);
 
-    // 5. Verify the viewer's page indicator matches
+    // 5. Verify the target page is visible (indicator or rendered canvas)
     var verified = await C.verifyPageNum(targetPage, 8000);
     if (!verified) {
-      // Final attempt: goToPage + sequential
+      // Final attempt: goToPage + check rendered pages
       try { await C.callInject('goToPage', { pageNum: targetPage }); } catch (e) {}
       await C.delay(1000);
-      var cur2 = 0;
-      try { cur2 = await C.callInject('getViewerPageNum'); } catch (e) {}
-      if (cur2 > 0 && cur2 !== targetPage && Math.abs(targetPage - cur2) <= 15) {
-        var step2 = targetPage > cur2 ? 'nextPage' : 'prevPage';
-        for (var s2 = 0; s2 < Math.abs(targetPage - cur2); s2++) {
-          await C.callInject(step2);
-          await C.delay(350);
+      if (!(await isTargetVisible())) {
+        var cur2 = 0;
+        try { cur2 = await C.callInject('getViewerPageNum'); } catch (e) {}
+        if (cur2 > 0 && cur2 !== targetPage && Math.abs(targetPage - cur2) <= 15) {
+          var step2 = targetPage > cur2 ? 'nextPage' : 'prevPage';
+          for (var s2 = 0; s2 < Math.abs(targetPage - cur2); s2++) {
+            await C.callInject(step2);
+            await C.delay(350);
+            if (await isTargetVisible()) break;
+          }
         }
       }
       verified = await C.verifyPageNum(targetPage, 4000);
@@ -123,10 +146,12 @@
       if (result && result.ok) break;
     }
 
-    // 10. Final verification: confirm viewer still shows the right page
+    // 10. Final verification: confirm target page is still visible
     try {
+      var rendered = await C.callInject('getRenderedPageNums');
       var finalPage = await C.callInject('getViewerPageNum');
-      if (finalPage !== targetPage) {
+      var stillVisible = (rendered && rendered.indexOf(targetPage) !== -1) || finalPage === targetPage;
+      if (!stillVisible) {
         return { ok: false, error: 'page_shifted_to_' + finalPage };
       }
     } catch (e) {}

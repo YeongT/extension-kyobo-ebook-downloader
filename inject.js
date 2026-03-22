@@ -1081,7 +1081,13 @@
     }).catch(function () { return []; });
   }
 
-  // ── 7c. Canvas fingerprint (detect content change after page navigation) ──
+  // ── 7c. Get rendered page numbers (handles 2-page spread view) ──
+  function getRenderedPageNums() {
+    var canvases = findAllCanvases();
+    return canvases.map(function (c) { return c.pageNum; });
+  }
+
+  // ── 7d. Canvas fingerprint (detect content change after page navigation) ──
   function getCanvasFingerprint() {
     var c = findCanvas();
     if (!c || c.width === 0 || c.height === 0) return '';
@@ -1123,6 +1129,7 @@
       case 'getViewerPageNum':     resp.data = getViewerPageNum(); send(); break;
       case 'getCapturedCount':     resp.data = capturedCount; send(); break;
       case 'getCanvasFingerprint': resp.data = getCanvasFingerprint(); send(); break;
+      case 'getRenderedPageNums':  resp.data = getRenderedPageNums(); send(); break;
       case 'ping':                 resp.data = 'pong'; send(); break;
       case 'getCanvasDimensions':
         var cv = findCanvas();
