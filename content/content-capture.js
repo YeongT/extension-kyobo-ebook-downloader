@@ -311,27 +311,40 @@
         while (C.isPaused && !C.shouldStop) await C.delay(500);
         if (document.hidden) { await C.focusViewerTab(); await C.delay(300); }
 
-        // Capture all visible canvases
-        var results = null;
-        try { results = await C.callInject('captureBothPages'); } catch (e) {}
-
-        // Read actual viewer position from rendered canvases
-        var renderedPages = [];
+        // Capture all visible canvases (retry if blank — canvas may still be rendering)
         var newCaptures = 0;
-        if (results && results.length > 0) {
-          for (var ri = 0; ri < results.length; ri++) {
-            var r = results[ri];
-            if (!r || !r.pageNum) continue;
-            renderedPages.push(r.pageNum);
-            if (!r.ok || r.pageNum < startPage || r.pageNum > endPage) continue;
-            if (cached[r.pageNum]) continue;
-            cached[r.pageNum] = true;
-            captured++; totalCached++; newCaptures++;
-            if (r.dataURL) {
-              await C.cachePageAsync(r.bookId, r.pageNum, r.dataURL, r.width, r.height);
-              r.dataURL = null;
+        var renderedPages = [];
+        for (var captureAttempt = 0; captureAttempt < 3; captureAttempt++) {
+          if (captureAttempt > 0) await C.delay(300);
+          var results = null;
+          try { results = await C.callInject('captureBothPages'); } catch (e) {}
+
+          if (results && results.length > 0) {
+            for (var ri = 0; ri < results.length; ri++) {
+              var r = results[ri];
+              if (!r || !r.pageNum) continue;
+              if (renderedPages.indexOf(r.pageNum) === -1) renderedPages.push(r.pageNum);
+              if (!r.ok || r.pageNum < startPage || r.pageNum > endPage) continue;
+              if (cached[r.pageNum]) continue;
+              cached[r.pageNum] = true;
+              captured++; totalCached++; newCaptures++;
+              if (r.dataURL) {
+                await C.cachePageAsync(r.bookId, r.pageNum, r.dataURL, r.width, r.height);
+                r.dataURL = null;
+              }
             }
           }
+          // Got new captures → move on. No captures but pages are all cached → move on too.
+          if (newCaptures > 0) break;
+          // Check if current pages are already cached (no retry needed)
+          var allCached = true;
+          try {
+            var curRendered = await C.callInject('getRenderedPageNums');
+            for (var ci = 0; ci < curRendered.length; ci++) {
+              if (curRendered[ci] >= startPage && curRendered[ci] <= endPage && !cached[curRendered[ci]]) { allCached = false; break; }
+            }
+          } catch (e) { allCached = false; }
+          if (allCached) break;
         }
 
         // Update viewer position from what we actually see
